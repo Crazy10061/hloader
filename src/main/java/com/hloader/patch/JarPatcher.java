@@ -104,7 +104,7 @@ public final class JarPatcher {
             Path ownPath = Path.of(codeSource.getLocation().toURI());
             if (!Files.isRegularFile(ownPath)) {
                 throw new IOException("hloader isn't running from a jar (" + ownPath
-                        + ") — build and run the fat jar (./gradlew fatJar) instead of running from compiled classes.");
+                        + ") — build and run the fat jar (./gradlew shadowJar) instead of running from compiled classes.");
             }
             return new JarFile(ownPath.toFile());
         } catch (URISyntaxException e) {

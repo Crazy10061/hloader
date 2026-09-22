@@ -1,3 +1,7 @@
+pluginManagement {
+    includeBuild("hloader-gradle-plugin")
+}
+
 rootProject.name = "hloader"
 
 dependencyResolutionManagement {

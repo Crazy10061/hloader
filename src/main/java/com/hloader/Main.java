@@ -16,21 +16,18 @@ public final class Main {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
-            printUsage();
             return;
         }
 
         switch (args[0]) {
             case "patch" -> {
                 if (args.length < 3) {
-                    printUsage();
                     return;
                 }
                 JarPatcher.patch(Path.of(args[1]), Path.of(args[2]));
             }
             case "run" -> {
                 if (args.length < 2) {
-                    printUsage();
                     return;
                 }
                 Path input = Path.of(args[1]);
@@ -40,7 +37,6 @@ public final class Main {
                 int exitCode = launch(patched, java.util.Arrays.copyOfRange(args, 2, args.length));
                 System.exit(exitCode);
             }
-            default -> printUsage();
         }
     }
 
@@ -61,17 +57,5 @@ public final class Main {
                 .inheritIO()
                 .start();
         return process.waitFor();
-    }
-
-    private static void printUsage() {
-        System.out.println("""
-                Usage:
-                  hloader patch <input.jar> <output.jar>   Patch a jar with the hloader agent hook and write it out.
-                  hloader run <input.jar> [game args...]   Patch in memory and launch it immediately.
-
-                Drop mod jars into a "mods" directory next to wherever the patched jar is run from.
-                A mod is any class annotated @HMod that implements ModEntrypoint.
-                A mod can also ship a "*.mixins.json" Mixin config at its jar root to transform game classes.
-                """);
     }
 }
