@@ -25,6 +25,9 @@ public abstract class DownloadMinecraftJar extends DefaultTask {
     @Input
     public abstract Property<String> getSide();
 
+    @Input
+    public abstract Property<Boolean> getPatchLegacyLaunchWrapper();
+
     @OutputFile
     public File getOutputJar() {
         return new File(getProject().getGradle().getGradleUserHomeDir(),
@@ -53,7 +56,8 @@ public abstract class DownloadMinecraftJar extends DefaultTask {
 
     private MinecraftVersionInfo resolvedInfo() {
         if (resolvedInfo == null) {
-            resolvedInfo = VersionResolver.fetchVersionInfo(getMinecraftVersion().get(), getSide().get());
+            resolvedInfo = VersionResolver.fetchVersionInfo(
+                    getMinecraftVersion().get(), getSide().get(), getPatchLegacyLaunchWrapper().get());
         }
         return resolvedInfo;
     }

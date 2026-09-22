@@ -29,10 +29,12 @@ public class HloaderPlugin implements Plugin<Project> {
 
         HloaderExtension extension = project.getExtensions().create("hloader", HloaderExtension.class);
         extension.getMinecraftVersion().convention("latest");
+        extension.getPatchLegacyLaunchWrapper().convention(true);
 
         TaskProvider<DownloadMinecraftJar> downloadServerJarTask = project.getTasks().register(
                 "downloadMinecraftJar", DownloadMinecraftJar.class, task -> {
                     task.getMinecraftVersion().set(extension.getMinecraftVersion());
+                    task.getPatchLegacyLaunchWrapper().set(extension.getPatchLegacyLaunchWrapper());
                     task.getSide().set("server");
                 });
 
@@ -78,6 +80,7 @@ public class HloaderPlugin implements Plugin<Project> {
             task.getLoaderJar().set(project.getLayout().file(loaderJarTask.map(t -> ((Jar) t).getArchiveFile().get().getAsFile())));
             task.getServerJar().set(project.getLayout().file(downloadServerJarTask.map(DownloadMinecraftJar::getOutputJar)));
             task.getModJar().set(project.getLayout().file(modJarTask.map(t -> ((Jar) t).getArchiveFile().get().getAsFile())));
+            task.getVersionInfo().set(project.provider(downloadServerJarTask.get()::getVersionInfo));
             task.getRunDir().set(project.getLayout().getBuildDirectory().dir("hloader/runServer"));
             task.getExportMixins().set(project.provider(() -> project.hasProperty("exportMixins")));
             task.getOutputs().upToDateWhen(t -> false);
@@ -86,6 +89,7 @@ public class HloaderPlugin implements Plugin<Project> {
         TaskProvider<DownloadMinecraftJar> downloadClientJarTask = project.getTasks().register(
                 "downloadClientJar", DownloadMinecraftJar.class, task -> {
                     task.getMinecraftVersion().set(extension.getMinecraftVersion());
+                    task.getPatchLegacyLaunchWrapper().set(extension.getPatchLegacyLaunchWrapper());
                     task.getSide().set("client");
                 });
 

@@ -11,6 +11,7 @@ import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFile;
+import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.process.ExecOperations;
@@ -31,6 +32,9 @@ public abstract class RunDevServer extends DefaultTask {
     @InputFile
     public abstract RegularFileProperty getModJar();
 
+    @Internal
+    public abstract Property<MinecraftVersionInfo> getVersionInfo();
+
     @OutputDirectory
     public abstract DirectoryProperty getRunDir();
 
@@ -42,6 +46,14 @@ public abstract class RunDevServer extends DefaultTask {
 
     @TaskAction
     public void run() throws IOException {
+        MinecraftVersionInfo info = getVersionInfo().get();
+        if (!info.dedicatedServer()) {
+            throw new IllegalStateException("Minecraft " + info.versionId() + " has no dedicated server release "
+                    + "(no \"server\" download in Mojang's manifest) - runDevServer isn't available for this "
+                    + "version. " + info.versionId() + "'s client jar is used as a compile-time substitute "
+                    + "elsewhere, but it has no runnable server entry point.");
+        }
+
         Path runDir = getRunDir().get().getAsFile().toPath();
         Path modsDir = runDir.resolve("mods");
         Files.createDirectories(modsDir);

@@ -22,6 +22,21 @@ final class VersionResolver {
     private static final String MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
     /**
+     * Versions old enough to boot through this exact class (roughly pre-1.6) hit a long list of
+     * known-bad interactions with modern Java/LWJGL that Mojang's original LaunchWrapper never
+     * accounted for. MCPHackers' fork (github.com/MCPHackers/LaunchWrapper) is a drop-in
+     * replacement - same class name, published at the coordinates below - that fixes them; see
+     * {@link #withMcpHackersLaunchWrapper}.
+     */
+    private static final String LAUNCHWRAPPER_MAIN_CLASS = "net.minecraft.launchwrapper.Launch";
+    private static final String MCPHACKERS_LAUNCHWRAPPER_VERSION = "1.3.0";
+    private static final String MCPHACKERS_MAVEN = "https://maven.glass-launcher.net/releases/";
+    private static final String MAVEN_CENTRAL = "https://repo1.maven.org/maven2/";
+    /** MCPHackers' LaunchWrapper's own runtime dependencies (its published POM lists none, but its classes reference these directly - see its build.gradle). */
+    private static final String ASM_VERSION = "9.10.1";
+    private static final String JSON_VERSION = "20250517";
+
+    /**
      * LWJGL 2 and this exact jinput build predate Apple Silicon and were never given an arm64
      * macOS build by their original authors, so Mojang's manifest has no "osx-arm64" entry for
      * them at all. These are the same community rebuilds PrismLauncher's own meta service
@@ -47,7 +62,7 @@ final class VersionResolver {
     }
 
     /** {@code side} is {@code "client"} or {@code "server"}. */
-    static MinecraftVersionInfo fetchVersionInfo(String minecraftVersion, String side) {
+    static MinecraftVersionInfo fetchVersionInfo(String minecraftVersion, String side, boolean patchLegacyLaunchWrapper) {
         JsonObject manifest = JsonParser.parseString(fetch(MANIFEST_URL)).getAsJsonObject();
         String versionId = "latest".equals(minecraftVersion)
                 ? manifest.getAsJsonObject("latest").get("release").getAsString()
@@ -69,12 +84,14 @@ final class VersionResolver {
         String mainClass = versionJson.get("mainClass").getAsString();
         JsonObject downloads = versionJson.getAsJsonObject("downloads");
         JsonObject sideDownload = downloads == null ? null : downloads.getAsJsonObject(side);
+        boolean dedicatedServer = true;
         if (sideDownload == null) {
             // Versions from before Mojang started hosting a dedicated, hash-addressable server jar
             // (roughly pre-1.2.4, e.g. 1.0) have no "server" entry in the manifest at all - the
             // client jar is the closest available substitute for compiling against.
             if ("server".equals(side) && downloads != null && downloads.has("client")) {
                 sideDownload = downloads.getAsJsonObject("client");
+                dedicatedServer = false;
             } else {
                 throw new IllegalStateException(
                         "Minecraft " + versionId + " has no \"" + side + "\" download in Mojang's manifest.");
@@ -101,8 +118,46 @@ final class VersionResolver {
                 libraries.addAll(toLibraryInfos(element.getAsJsonObject(), allLibraryNames));
             }
         }
+        if (patchLegacyLaunchWrapper && LAUNCHWRAPPER_MAIN_CLASS.equals(mainClass)) {
+            libraries = withMcpHackersLaunchWrapper(libraries);
+        }
 
-        return new MinecraftVersionInfo(versionId, mainClass, downloadUrl, assetIndexId, assetIndexUrl, libraries);
+        return new MinecraftVersionInfo(versionId, mainClass, downloadUrl, assetIndexId, assetIndexUrl, libraries, dedicatedServer);
+    }
+
+    /**
+     * Drops the vanilla {@code net.minecraft:launchwrapper} entry (identified by its Maven path,
+     * the way every other library in this list is addressed) and adds MCPHackers' replacement
+     * plus its own runtime dependencies in its place. Only ever called for versions whose
+     * {@code mainClass} is exactly {@code net.minecraft.launchwrapper.Launch} - every other
+     * version's library list passes through this method untouched.
+     *
+     * <p>Also drops any {@code org.ow2.asm:*} entry already in the vanilla list (e.g. 1.0
+     * declares {@code asm-all:4.1}, a ~2012-era ASM that was LaunchWrapper 1.5's own transitive
+     * dependency, flattened into Mojang's manifest). Left in place, that ancient jar ends up on
+     * the classpath alongside the modern ASM MCPHackers' LaunchWrapper needs; since both define
+     * the same {@code org.objectweb.asm.ClassReader} class, whichever wins classpath ordering can
+     * shadow the other, and the ancient one can't parse a modern JDK's class files.</p>
+     */
+    private static List<LibraryInfo> withMcpHackersLaunchWrapper(List<LibraryInfo> original) {
+        List<LibraryInfo> patched = new ArrayList<>();
+        for (LibraryInfo library : original) {
+            if (!library.path().startsWith("net/minecraft/launchwrapper/")
+                    && !library.path().startsWith("org/ow2/asm/")) {
+                patched.add(library);
+            }
+        }
+        patched.add(mavenLibrary(MCPHACKERS_MAVEN, "org/mcphackers/launchwrapper", MCPHACKERS_LAUNCHWRAPPER_VERSION, "launchwrapper"));
+        patched.add(mavenLibrary(MAVEN_CENTRAL, "org/ow2/asm/asm", ASM_VERSION, "asm"));
+        patched.add(mavenLibrary(MAVEN_CENTRAL, "org/ow2/asm/asm-tree", ASM_VERSION, "asm-tree"));
+        patched.add(mavenLibrary(MAVEN_CENTRAL, "org/ow2/asm/asm-commons", ASM_VERSION, "asm-commons"));
+        patched.add(mavenLibrary(MAVEN_CENTRAL, "org/json/json", JSON_VERSION, "json"));
+        return patched;
+    }
+
+    private static LibraryInfo mavenLibrary(String repoBaseUrl, String groupAndArtifactPath, String version, String artifactId) {
+        String path = groupAndArtifactPath + "/" + version + "/" + artifactId + "-" + version + ".jar";
+        return new LibraryInfo(repoBaseUrl + path, path, false);
     }
 
     /**
