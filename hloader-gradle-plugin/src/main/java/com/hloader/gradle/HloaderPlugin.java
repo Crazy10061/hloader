@@ -93,6 +93,8 @@ public class HloaderPlugin implements Plugin<Project> {
                 "downloadClientLibraries", DownloadLibraries.class, task -> {
                     task.dependsOn(downloadClientJarTask);
                     task.getVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
+                    task.getLibraryPaths().set(task.getVersionInfo().map(
+                            v -> v.libraries().stream().map(LibraryInfo::path).toList()));
                     task.getLibrariesDir().set(project.getLayout().getBuildDirectory().dir("hloader/clientLibraries"));
                     task.getNativesDir().set(project.getLayout().getBuildDirectory().dir("hloader/clientNatives"));
                 });
@@ -101,6 +103,8 @@ public class HloaderPlugin implements Plugin<Project> {
                 "downloadAssets", DownloadAssets.class, task -> {
                     task.dependsOn(downloadClientJarTask);
                     task.getVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
+                    task.getAssetIndexId().set(task.getVersionInfo().map(
+                            v -> v.assetIndexId() == null ? "none" : v.assetIndexId()));
                     task.getAssetsDir().set(project.getLayout().getBuildDirectory().dir("hloader/assets"));
                 });
 

@@ -1,6 +1,9 @@
 package com.hloader.agent;
 
+import com.hloader.ClasspathJars;
 import com.hloader.Hook;
+import com.hloader.launch.LegacyClassLoaderCastTransformer;
+import com.hloader.launch.LegacyTweakerClassLoaderBridge;
 import com.hloader.mixin.HloaderMixinService;
 import java.io.IOException;
 import java.lang.instrument.ClassFileTransformer;
@@ -23,7 +26,7 @@ import org.spongepowered.asm.service.MixinService;
  * writes into the patched jar (or manually via {@code -javaagent}, hence
  * {@link #premain}). Because this runs as a JVM instrumentation agent rather
  * than a custom classloader, its {@link ClassFileTransformer} sees every
- * class loaded afterward by any classloader — including whatever the target
+ * class loaded afterward by any classloader, including whatever the target
  * jar builds internally at runtime.
  */
 public final class HloaderAgent {
@@ -40,6 +43,9 @@ public final class HloaderAgent {
     }
 
     private static void bootstrap(Instrumentation instrumentation) {
+        instrumentation.addTransformer(new LegacyClassLoaderCastTransformer(), false);
+        instrumentation.addTransformer(new LegacyTweakerClassLoaderBridge(), false);
+
         List<Path> modJars = Hook.findModJars();
         appendToClasspath(instrumentation, modJars);
 
@@ -55,6 +61,7 @@ public final class HloaderAgent {
         for (Path jar : jars) {
             try {
                 instrumentation.appendToSystemClassLoaderSearch(new JarFile(jar.toFile()));
+                ClasspathJars.register(jar);
             } catch (IOException e) {
                 System.err.println("hloader: failed to add " + jar + " to the classpath: " + e.getMessage());
             }
@@ -132,9 +139,20 @@ public final class HloaderAgent {
                 }
                 String dottedName = className.replace('/', '.');
                 try {
-                    return transformer.transformClassBytes(dottedName, dottedName, classfileBuffer);
+                    // Modern Minecraft loads classes from several worker threads at once during
+                    // resource-manager reloads. Sponge Mixin's transformer keeps mutable,
+                    // non-concurrent internal state (ClassInfo cache, etc.) and was never built
+                    // for concurrent invocation - pre-1.6 versions never triggered this since
+                    // they load classes on a single thread. Without this lock, concurrent calls
+                    // here corrupted that state badly enough to crash the JVM natively
+                    // (ACCESS_VIOLATION in jvm.dll, no catchable Java exception) rather than
+                    // just throwing.
+                    synchronized (transformer) {
+                        return transformer.transformClassBytes(dottedName, dottedName, classfileBuffer);
+                    }
                 } catch (Throwable t) {
-                    System.err.println("hloader: mixin transform failed for " + dottedName + ": " + t);
+                    System.err.println("hloader: mixin transform failed for " + dottedName + ":");
+                    t.printStackTrace();
                     return null;
                 }
             }

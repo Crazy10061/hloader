@@ -16,7 +16,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.file.DirectoryProperty;
+import org.gradle.api.provider.ListProperty;
 import org.gradle.api.provider.Property;
+import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.TaskAction;
@@ -28,6 +30,18 @@ public abstract class DownloadLibraries extends DefaultTask {
 
     @Internal
     public abstract Property<MinecraftVersionInfo> getVersionInfo();
+
+    /**
+     * {@code getVersionInfo()} is {@code @Internal} (resolving it means a network call, which
+     * Gradle shouldn't trigger just to snapshot task inputs), but that leaves this task with no
+     * tracked inputs at all - since {@link #getLibrariesDir()} isn't version-specific, Gradle
+     * then considers it up-to-date forever after the first run, even after switching Minecraft
+     * versions to one needing an entirely different set of libraries. Tracking the resolved
+     * library paths here (still lazy, still only evaluated when Gradle actually needs to check
+     * up-to-date-ness) gives it a real, changing input to key off instead.
+     */
+    @Input
+    public abstract ListProperty<String> getLibraryPaths();
 
     @OutputDirectory
     public abstract DirectoryProperty getLibrariesDir();

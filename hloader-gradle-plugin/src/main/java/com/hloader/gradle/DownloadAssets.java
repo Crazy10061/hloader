@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.file.DirectoryProperty;
 import org.gradle.api.provider.Property;
+import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.TaskAction;
@@ -35,6 +36,18 @@ public abstract class DownloadAssets extends DefaultTask {
 
     @Internal
     public abstract Property<MinecraftVersionInfo> getVersionInfo();
+
+    /**
+     * {@code getVersionInfo()} is {@code @Internal} (resolving it means a network call), which
+     * would otherwise leave this task with no tracked inputs at all - since
+     * {@link #getAssetsDir()} isn't version-specific, Gradle would then consider it up-to-date
+     * forever after the first run, skipping the write of a *new* version's own
+     * {@code indexes/<id>.json} after switching Minecraft versions. Individual asset objects are
+     * still safe either way (content-addressed, checked with {@code if (!dest.exists())}), but
+     * the index file itself needs this to always get (re)written when the asset index changes.
+     */
+    @Input
+    public abstract Property<String> getAssetIndexId();
 
     @OutputDirectory
     public abstract DirectoryProperty getAssetsDir();

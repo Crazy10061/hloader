@@ -1,5 +1,6 @@
 package com.hloader.gradle;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -9,9 +10,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /** Talks to Mojang's public version manifest to resolve version metadata for either game side. */
 final class VersionResolver {
@@ -64,7 +67,20 @@ final class VersionResolver {
 
         JsonObject versionJson = JsonParser.parseString(fetch(versionUrl)).getAsJsonObject();
         String mainClass = versionJson.get("mainClass").getAsString();
-        String downloadUrl = versionJson.getAsJsonObject("downloads").getAsJsonObject(side).get("url").getAsString();
+        JsonObject downloads = versionJson.getAsJsonObject("downloads");
+        JsonObject sideDownload = downloads == null ? null : downloads.getAsJsonObject(side);
+        if (sideDownload == null) {
+            // Versions from before Mojang started hosting a dedicated, hash-addressable server jar
+            // (roughly pre-1.2.4, e.g. 1.0) have no "server" entry in the manifest at all - the
+            // client jar is the closest available substitute for compiling against.
+            if ("server".equals(side) && downloads != null && downloads.has("client")) {
+                sideDownload = downloads.getAsJsonObject("client");
+            } else {
+                throw new IllegalStateException(
+                        "Minecraft " + versionId + " has no \"" + side + "\" download in Mojang's manifest.");
+            }
+        }
+        String downloadUrl = sideDownload.get("url").getAsString();
 
         String assetIndexId = null;
         String assetIndexUrl = null;
@@ -76,8 +92,13 @@ final class VersionResolver {
 
         List<LibraryInfo> libraries = new ArrayList<>();
         if (versionJson.has("libraries")) {
-            for (JsonElement element : versionJson.getAsJsonArray("libraries")) {
-                libraries.addAll(toLibraryInfos(element.getAsJsonObject()));
+            JsonArray libraryArray = versionJson.getAsJsonArray("libraries");
+            Set<String> allLibraryNames = new HashSet<>();
+            for (JsonElement element : libraryArray) {
+                allLibraryNames.add(element.getAsJsonObject().get("name").getAsString());
+            }
+            for (JsonElement element : libraryArray) {
+                libraries.addAll(toLibraryInfos(element.getAsJsonObject(), allLibraryNames));
             }
         }
 
@@ -90,9 +111,10 @@ final class VersionResolver {
      * name suffix) and, on old (pre-1.13-ish) versions, a natives jar declared via a top-level
      * {@code natives} map pointing into {@code downloads.classifiers} instead.
      */
-    private static List<LibraryInfo> toLibraryInfos(JsonObject library) {
+    private static List<LibraryInfo> toLibraryInfos(JsonObject library, Set<String> allLibraryNames) {
         List<LibraryInfo> result = new ArrayList<>();
-        if (!isAllowedOnCurrentOs(library)) {
+        String name = library.get("name").getAsString();
+        if (!isAllowedOnCurrentOs(library) || !matchesCurrentArch(name, allLibraryNames)) {
             return result;
         }
         JsonObject downloads = library.getAsJsonObject("downloads");
@@ -146,6 +168,32 @@ final class VersionResolver {
         boolean isMac = osName.contains("mac") || osName.contains("darwin");
         boolean isArm = arch.contains("aarch64") || arch.contains("arm");
         return isMac && isArm;
+    }
+
+    /**
+     * Modern (LWJGL 3.x-era) manifests list a separate library entry per architecture for the
+     * same natives, distinguished only by a {@code -arm64} suffix on the classifier (e.g.
+     * {@code org.lwjgl:lwjgl-sdl:3.4.3:natives-windows} alongside
+     * {@code ...:natives-windows-arm64}) - both entries' {@code rules} just say "windows", with
+     * no {@code arch} field to filter on. Downloading and extracting both onto the same
+     * {@code -natives} directory means two same-named DLLs race to occupy the same file, and
+     * whichever extracts last wins; on a non-ARM host that can silently leave the wrong-arch
+     * (arm64) native in place, which then fails to load with a generic "invalid Win32
+     * application"-style error. Skip the variant that doesn't match the current JVM's
+     * architecture whenever a matching counterpart for the *other* architecture exists.
+     */
+    private static boolean matchesCurrentArch(String libraryName, Set<String> allLibraryNames) {
+        boolean hostIsArm64 = isArm64();
+        boolean nameIsArm64 = libraryName.endsWith("-arm64");
+        if (nameIsArm64) {
+            return hostIsArm64;
+        }
+        return !hostIsArm64 || !allLibraryNames.contains(libraryName + "-arm64");
+    }
+
+    private static boolean isArm64() {
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        return arch.contains("aarch64") || arch.contains("arm64");
     }
 
     private static boolean isAllowedOnCurrentOs(JsonObject library) {

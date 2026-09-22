@@ -6,7 +6,10 @@ plugins {
 description = "A minimal mod, for testing the loader end to end."
 
 hloader {
-    minecraftVersion.set("1.8.9")
+    minecraftVersion.set("latest")
+    //minecraftVersion.set("1.12.2")
+    //minecraftVersion.set("1.8.9")
+    //minecraftVersion.set("rd-132211")
 }
 
 dependencies {
