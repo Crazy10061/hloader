@@ -79,6 +79,14 @@ public abstract class RunDevClient extends DefaultTask {
             spec.classpath(classpath);
             spec.jvmArgs("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
             spec.jvmArgs("-Djava.library.path=" + getNativesDir().get().getAsFile().getPath());
+
+            Package pkg = getClass().getPackage();
+            String name = pkg.getName();
+            String version = pkg.getImplementationVersion();
+
+            spec.jvmArgs("-Dminecraft.launcher.brand=" + name);
+            spec.jvmArgs("-Dminecraft.launcher.version=" + version);
+
             spec.getMainClass().set(info.mainClass());
             spec.args(
                     "--username", "Dev",
