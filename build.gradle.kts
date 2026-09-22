@@ -1,4 +1,6 @@
+import groovy.json.JsonSlurper
 import java.net.URI
+import java.util.zip.ZipFile
 
 plugins {
     application
@@ -76,7 +78,7 @@ tasks.register("downloadLatestServerJar") {
     group = "hloader"
     description = "Downloads the latest official Minecraft server.jar into demo-target/server.jar."
     doLast {
-        val slurper = groovy.json.JsonSlurper()
+        val slurper = JsonSlurper()
 
         val manifestText = URI("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").toURL().readText()
         @Suppress("UNCHECKED_CAST")
@@ -102,6 +104,59 @@ tasks.register("downloadLatestServerJar") {
             outFile.outputStream().use { output -> input.copyTo(output) }
         }
         logger.lifecycle("hloader: saved $releaseId server.jar to ${outFile.path}")
+    }
+}
+
+val gameJar = layout.buildDirectory.file("extracted/game.jar")
+
+val extractGameJar by tasks.registering {
+    group = "hloader"
+    description = "Extracts the actual (unobfuscated) game jar bundled inside demo-target/server.jar, so mods can compile against real game classes instead of just the bundler wrapper."
+    val input = demoServerJar.asFile
+    val output = gameJar
+    onlyIf { input.exists() }
+    outputs.file(output)
+    doLast {
+        val outputFile = output.get().asFile
+        ZipFile(input).use { zip ->
+            val listEntry = zip.getEntry("META-INF/versions.list")
+                ?: throw GradleException("${input.path} has no META-INF/versions.list - not a bundler-format jar")
+            val firstLine = zip.getInputStream(listEntry).bufferedReader().readText().lineSequence().first { it.isNotBlank() }
+            val path = firstLine.split("\t")[2]
+            val jarEntry = zip.getEntry("META-INF/versions/$path")
+                ?: throw GradleException("${input.path} doesn't contain META-INF/versions/$path")
+            outputFile.parentFile.mkdirs()
+            zip.getInputStream(jarEntry).use { entryStream -> outputFile.outputStream().use { out -> entryStream.copyTo(out) } }
+        }
+        logger.lifecycle("hloader: extracted game jar to ${outputFile.path}")
+    }
+}
+
+val librariesDir = layout.buildDirectory.dir("extracted/libraries")
+
+val extractLibraries by tasks.registering {
+    group = "hloader"
+    description = "Extracts the game jar's own library jars from demo-target/server.jar, so javac can fully resolve its type annotations."
+    val input = demoServerJar.asFile
+    val output = librariesDir
+    onlyIf { input.exists() }
+    outputs.dir(output)
+    doLast {
+        val outputDir = output.get().asFile
+        ZipFile(input).use { zip ->
+            val listEntry = zip.getEntry("META-INF/libraries.list")
+                ?: throw GradleException("${input.path} has no META-INF/libraries.list - not a bundler-format jar")
+            val lines = zip.getInputStream(listEntry).bufferedReader().readText().lineSequence().filter { it.isNotBlank() }
+            outputDir.mkdirs()
+            for (line in lines) {
+                val path = line.split("\t")[2]
+                val jarEntry = zip.getEntry("META-INF/libraries/$path")
+                    ?: throw GradleException("${input.path} doesn't contain META-INF/libraries/$path")
+                val outFile = outputDir.resolve(path.substringAfterLast("/"))
+                zip.getInputStream(jarEntry).use { entryStream -> outFile.outputStream().use { out -> entryStream.copyTo(out) } }
+            }
+        }
+        logger.lifecycle("hloader: extracted libraries to ${outputDir.path}")
     }
 }
 

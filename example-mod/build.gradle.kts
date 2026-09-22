@@ -4,11 +4,23 @@ plugins {
 
 description = "A minimal mod, for testing the loader end to end."
 
+val gameJar = rootProject.layout.buildDirectory.file("extracted/game.jar")
+val librariesDir = rootProject.layout.buildDirectory.dir("extracted/libraries")
+
 dependencies {
     compileOnly(project(":"))
     compileOnly("org.spongepowered:mixin:0.8.7")
-    // The mixin below targets net.minecraft.bundler.Main directly (unobfuscated, no refmap needed).
+    // Mixins below target net.minecraft.bundler.Main (the wrapper, unobfuscated by nature) and
+    // net.minecraft.server.Main (the actual game entrypoint, extracted from server.jar - also unobfuscated).
     compileOnly(files(rootProject.file("demo-target/server.jar")))
+    compileOnly(files(gameJar))
+    // javac needs these on the classpath to fully resolve game.jar's own type annotations.
+    compileOnly(fileTree(librariesDir) { include("*.jar") })
+}
+
+tasks.compileJava {
+    dependsOn(rootProject.tasks.named("extractGameJar"))
+    dependsOn(rootProject.tasks.named("extractLibraries"))
 }
 
 tasks.jar {
