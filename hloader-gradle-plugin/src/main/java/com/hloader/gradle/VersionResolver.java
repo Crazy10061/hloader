@@ -1,6 +1,5 @@
 package com.hloader.gradle;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -153,6 +152,7 @@ final class VersionResolver {
         if (!library.has("rules")) {
             return true;
         }
+
         String currentOs = currentOsName();
         boolean allowed = false;
         for (JsonElement element : library.getAsJsonArray("rules")) {
