@@ -2,5 +2,7 @@
   "id": "example-mod",
   "version": "1.0.0",
   "entrypoint": "com.example.ExampleMod",
+  "asmEntrypoint": "com.example.ExampleAsmTransformer",
+  "accessTransformer": "example_at.cfg",
   "depends": []
 }

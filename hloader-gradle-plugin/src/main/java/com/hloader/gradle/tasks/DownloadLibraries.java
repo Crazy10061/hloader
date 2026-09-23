@@ -78,10 +78,7 @@ public abstract class DownloadLibraries extends DefaultTask {
                     File dest = new File(librariesDir, lib.path());
                     if (!dest.exists()) {
                         Files.createDirectories(dest.getParentFile().toPath());
-
-                        try (InputStream in = URI.create(lib.url()).toURL().openStream()) {
-                            Files.copy(in, dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                        }
+                        downloadWithRetry(lib.url(), dest);
                     }
 
                     if (lib.isNative()) {
@@ -109,6 +106,32 @@ public abstract class DownloadLibraries extends DefaultTask {
         getLogger().lifecycle("hloader: " + total + " libraries ready in " + librariesDir);
     }
 
+    /**
+     * Copying straight into {@code dest} left two problems: a download interrupted partway
+     * through a transient failure (several parallel downloads hitting the same GitHub raw-content
+     * host, which occasionally resets connections under concurrent load) left a corrupt partial
+     * file behind that {@code dest.exists()} would then skip re-downloading forever; and there was
+     * no retry at all for exactly that kind of transient failure. Downloading to a temp file and
+     * atomically renaming it into place fixes the first; a couple of retries fixes the second.
+     */
+    private static void downloadWithRetry(String url, File dest) throws IOException {
+        IOException last = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            File tempDest = File.createTempFile(dest.getName(), ".tmp", dest.getParentFile());
+            try {
+                try (InputStream in = URI.create(url).toURL().openStream()) {
+                    Files.copy(in, tempDest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+                Files.move(tempDest.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                return;
+            } catch (IOException e) {
+                last = e;
+                Files.deleteIfExists(tempDest.toPath());
+            }
+        }
+        throw last;
+    }
+
     private void extractNatives(File jarFile, File nativesDir) throws IOException {
         try (ZipFile zip = new ZipFile(jarFile)) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
@@ -118,10 +141,18 @@ public abstract class DownloadLibraries extends DefaultTask {
                 if (entry.isDirectory() || name.startsWith("META-INF/") || !isNativeLibraryFile(name)) {
                     continue;
                 }
+                // Several library entries can independently extract into the same nativesDir at
+                // once (this whole method runs from a thread pool) and can even target the exact
+                // same destination filename - writing in place risks one thread reading a
+                // partially-overwritten file, or macOS refusing the overwrite outright ("Resource
+                // busy") if another thread has the old copy open. Writing to a temp file first and
+                // atomically renaming it into place avoids both.
                 File out = new File(nativesDir, new File(name).getName());
+                File tempOut = File.createTempFile(out.getName(), ".tmp", nativesDir);
                 try (InputStream in = zip.getInputStream(entry)) {
-                    Files.copy(in, out.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    Files.copy(in, tempOut.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 }
+                Files.move(tempOut.toPath(), out.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             }
         }
     }

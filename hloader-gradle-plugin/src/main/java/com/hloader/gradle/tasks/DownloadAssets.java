@@ -96,8 +96,15 @@ public abstract class DownloadAssets extends DefaultTask {
                     File dest = new File(objectsDir, prefix + "/" + hash);
                     if (!dest.exists()) {
                         Files.createDirectories(dest.getParentFile().toPath());
+                        // Writing straight to dest would leave a corrupt partial file behind after
+                        // a connection drop mid-download - dest.exists() would then skip
+                        // re-downloading it forever. A temp file + atomic rename avoids that.
+                        File tempDest = File.createTempFile(hash, ".tmp", dest.getParentFile());
                         try (InputStream in = URI.create("https://resources.download.minecraft.net/" + prefix + "/" + hash).toURL().openStream()) {
-                            Files.copy(in, dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                            Files.copy(in, tempDest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                            Files.move(tempDest.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                        } finally {
+                            Files.deleteIfExists(tempDest.toPath());
                         }
 
                         downloaded.getAndIncrement();

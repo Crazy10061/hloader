@@ -1,10 +1,20 @@
 package com.hloader;
 
+import com.hloader.at.AccessTransformerApplier;
+import com.hloader.at.AccessTransformerParser;
+import com.hloader.at.AccessTransformerRule;
+import com.hloader.mixin.RuntimeClassMap;
+import com.hloader.mod.AsmEntrypointTransformer;
+import com.hloader.mod.AsmTransformer;
+import com.hloader.mod.ModClassLoader;
 import com.hloader.mod.ModContext;
 import com.hloader.mod.ModEntrypoint;
 import com.hloader.mod.ModMetadata;
 import com.hloader.mod.ModScanner;
 import java.io.IOException;
+import java.lang.instrument.Instrumentation;
+import java.net.MalformedURLException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,6 +27,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 
 /** Discovers mod jars, initializes their entrypoints, and runs their lifecycle. */
 public final class Hook {
@@ -47,19 +59,20 @@ public final class Hook {
         return jars;
     }
 
-    public static void boot(List<Path> jars) {
+    public static void boot(List<Path> jars, Instrumentation instrumentation, RuntimeClassMap classMap) {
         if (jars.isEmpty()) {
             System.out.println("hloader: no mod jars found in " + MODS_DIR.toAbsolutePath());
             return;
         }
 
-        List<ModMetadata> mods;
+        Map<ModMetadata, Path> scanned;
         try {
-            mods = ModScanner.scan(jars);
+            scanned = ModScanner.scan(jars);
         } catch (IOException e) {
             System.err.println("hloader: failed to scan mods/: " + e.getMessage());
             return;
         }
+        List<ModMetadata> mods = new ArrayList<>(scanned.keySet());
 
         Set<String> ids = new HashSet<>();
         for (ModMetadata mod : mods) {
@@ -75,17 +88,60 @@ public final class Hook {
 
         List<ModMetadata> ordered = sortByDependencies(mods);
 
-        List<LoadedMod> loaded = new ArrayList<>();
+        // Each mod's own ModClassLoader is created once here and reused for its entrypoint below,
+        // so access-transformer/raw-ASM registration (which mods may rely on being active before
+        // their own onInitialize() runs, e.g. if it reflectively touches a widened field) always
+        // happens before any mod's lifecycle methods do.
+        Map<ModMetadata, ClassLoader> classLoaders = new HashMap<>();
+        List<AccessTransformerRule> atRules = new ArrayList<>();
+        List<AsmTransformer> asmTransformers = new ArrayList<>();
         for (ModMetadata mod : ordered) {
             try {
-                Class<?> clazz = Class.forName(mod.entrypoint(), false, ClassLoader.getSystemClassLoader());
-                if (!ModEntrypoint.class.isAssignableFrom(clazz)) {
-                    System.err.println("hloader: " + mod.id() + "'s entrypoint " + mod.entrypoint() + " doesn't implement ModEntrypoint");
-                    continue;
+                Path jar = scanned.get(mod);
+                ClassLoader modClassLoader = new ModClassLoader(mod.id(), jar.toUri().toURL(), Hook.class.getClassLoader());
+                classLoaders.put(mod, modClassLoader);
+
+                if (mod.accessTransformer() != null) {
+                    atRules.addAll(readAccessTransformer(jar, mod));
                 }
-                ModEntrypoint entrypoint = (ModEntrypoint) clazz.getDeclaredConstructor().newInstance();
+                if (mod.asmEntrypoint() != null) {
+                    AsmTransformer asmTransformer = loadAsmEntrypoint(mod, modClassLoader);
+                    if (asmTransformer != null) {
+                        asmTransformers.add(asmTransformer);
+                    }
+                }
+            } catch (MalformedURLException e) {
+                System.err.println("hloader: failed to prepare " + mod.id() + ": " + e);
+            }
+        }
+
+        if (!atRules.isEmpty()) {
+            instrumentation.addTransformer(new AccessTransformerApplier(atRules, classMap), false);
+            System.out.println("hloader: " + atRules.size() + " access transformer rule(s) active");
+        }
+        if (!asmTransformers.isEmpty()) {
+            instrumentation.addTransformer(new AsmEntrypointTransformer(asmTransformers), false);
+            System.out.println("hloader: " + asmTransformers.size() + " ASM transformer(s) active");
+        }
+
+        List<LoadedMod> loaded = new ArrayList<>();
+        for (ModMetadata mod : ordered) {
+            ClassLoader modClassLoader = classLoaders.get(mod);
+            if (modClassLoader == null) {
+                continue;
+            }
+            try {
+                ModEntrypoint entrypoint = null;
                 ModContext context = new ModContext(mod.id(), mod.version());
-                entrypoint.onInitialize(context);
+                if (mod.entrypoint() != null) {
+                    Class<?> clazz = Class.forName(mod.entrypoint(), false, modClassLoader);
+                    if (!ModEntrypoint.class.isAssignableFrom(clazz)) {
+                        System.err.println("hloader: " + mod.id() + "'s entrypoint " + mod.entrypoint() + " doesn't implement ModEntrypoint");
+                        continue;
+                    }
+                    entrypoint = (ModEntrypoint) clazz.getDeclaredConstructor().newInstance();
+                    entrypoint.onInitialize(context);
+                }
                 loaded.add(new LoadedMod(mod.id(), mod.version(), entrypoint, context));
             } catch (ReflectiveOperationException e) {
                 System.err.println("hloader: failed to initialize " + mod.id() + ": " + e);
@@ -95,13 +151,18 @@ public final class Hook {
         System.out.println("hloader: " + loaded.size() + " mod(s) initialized: " + summarize(loaded));
 
         for (LoadedMod mod : loaded) {
-            mod.entrypoint().onEnable(mod.context());
+            if (mod.entrypoint() != null) {
+                mod.entrypoint().onEnable(mod.context());
+            }
         }
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             List<LoadedMod> reversed = new ArrayList<>(loaded);
             Collections.reverse(reversed);
             for (LoadedMod mod : reversed) {
+                if (mod.entrypoint() == null) {
+                    continue;
+                }
                 try {
                     mod.entrypoint().onDisable(mod.context());
                 } catch (RuntimeException e) {
@@ -109,6 +170,39 @@ public final class Hook {
                 }
             }
         }, "hloader-shutdown"));
+    }
+
+    private static List<AccessTransformerRule> readAccessTransformer(Path jar, ModMetadata mod) {
+        try (JarFile jarFile = new JarFile(jar.toFile())) {
+            JarEntry entry = jarFile.getJarEntry(mod.accessTransformer());
+            if (entry == null) {
+                System.err.println("hloader: " + mod.id() + " declares accessTransformer \"" + mod.accessTransformer()
+                        + "\" but its jar has no such entry");
+                return List.of();
+            }
+            String text;
+            try (var in = jarFile.getInputStream(entry)) {
+                text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            return AccessTransformerParser.parse(text);
+        } catch (IOException e) {
+            System.err.println("hloader: failed to read " + mod.id() + "'s access transformer: " + e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static AsmTransformer loadAsmEntrypoint(ModMetadata mod, ClassLoader modClassLoader) {
+        try {
+            Class<?> clazz = Class.forName(mod.asmEntrypoint(), false, modClassLoader);
+            if (!AsmTransformer.class.isAssignableFrom(clazz)) {
+                System.err.println("hloader: " + mod.id() + "'s asmEntrypoint " + mod.asmEntrypoint() + " doesn't implement AsmTransformer");
+                return null;
+            }
+            return (AsmTransformer) clazz.getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
+            System.err.println("hloader: failed to load " + mod.id() + "'s asmEntrypoint: " + e);
+            return null;
+        }
     }
 
     /** Kahn's algorithm: mods with no unresolved dependency go first. Missing deps are ignored (already warned about above). */

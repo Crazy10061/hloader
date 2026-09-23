@@ -1,8 +1,11 @@
 package com.hloader.mixin;
 
+import com.hloader.ClasspathJars;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.jar.JarFile;
 import org.spongepowered.asm.launch.platform.container.ContainerHandleVirtual;
 import org.spongepowered.asm.launch.platform.container.IContainerHandle;
 import org.spongepowered.asm.logging.ILogger;
@@ -110,7 +113,27 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
 
     @Override
     public InputStream getResourceAsStream(String name) {
-        return ClassLoader.getSystemResourceAsStream(name);
+        InputStream systemStream = ClassLoader.getSystemResourceAsStream(name);
+        if (systemStream != null) {
+            return systemStream;
+        }
+        // Mod jars aren't on the system classpath (each mod gets its own ModClassLoader instead,
+        // for isolation - see com.hloader.mod.ModClassLoader), so a mixin config's own resource
+        // (e.g. its "*.mixins.json") has to be found here instead.
+        for (var jar : ClasspathJars.extra()) {
+            try (JarFile jarFile = new JarFile(jar.toFile())) {
+                var entry = jarFile.getEntry(name);
+                if (entry == null) {
+                    continue;
+                }
+                try (InputStream in = jarFile.getInputStream(entry)) {
+                    return new java.io.ByteArrayInputStream(in.readAllBytes());
+                }
+            } catch (IOException ignored) {
+                // Try the next jar.
+            }
+        }
+        return null;
     }
 
     // MixinServiceAbstract's default logger discards everything, silently swallowing warnings

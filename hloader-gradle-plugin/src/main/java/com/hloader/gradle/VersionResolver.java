@@ -226,13 +226,16 @@ public final class VersionResolver {
      * that gap without touching versions that already avoid it.
      */
     private static LibraryInfo appleSiliconLwjglJavaJarOverride(String libraryName) {
+        // Only 2.9.0 is confirmed to have this ABI mismatch (see 1.0, rd-132211) - later 2.9.x
+        // point releases are closer to (or past) the native override's own 2.9.4-nightly base and
+        // don't need bumping, so this only touches the one version actually known to be broken.
         if (!isAppleSiliconMac()) {
             return null;
         }
-        if (libraryName.startsWith("org.lwjgl.lwjgl:lwjgl:") && !libraryName.equals("org.lwjgl.lwjgl:lwjgl:2.9.1")) {
+        if (libraryName.equals("org.lwjgl.lwjgl:lwjgl:2.9.0")) {
             return mavenLibrary(MAVEN_CENTRAL, "org/lwjgl/lwjgl/lwjgl", "2.9.1", "lwjgl");
         }
-        if (libraryName.startsWith("org.lwjgl.lwjgl:lwjgl_util:") && !libraryName.equals("org.lwjgl.lwjgl:lwjgl_util:2.9.1")) {
+        if (libraryName.equals("org.lwjgl.lwjgl:lwjgl_util:2.9.0")) {
             return mavenLibrary(MAVEN_CENTRAL, "org/lwjgl/lwjgl/lwjgl_util", "2.9.1", "lwjgl_util");
         }
         return null;

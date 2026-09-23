@@ -31,17 +31,28 @@ public final class JarPatcher {
     private JarPatcher() {
     }
 
-    public static void patch(Path inputJar, Path outputJar) throws IOException {
+    /** {@code explicitMainClass} may be {@code null} to use whatever the jar's own manifest
+     * already declares - see the other overload's doc for why that's often not there at all. */
+    public static void patch(Path inputJar, Path outputJar, String explicitMainClass) throws IOException {
         try (JarFile in = new JarFile(inputJar.toFile())) {
             Manifest manifest = in.getManifest();
             if (manifest == null) {
-                throw new IOException(inputJar + " has no manifest.");
+                manifest = new Manifest();
+                manifest.getMainAttributes().putValue("Manifest-Version", "1.0");
             }
             Attributes mainAttributes = manifest.getMainAttributes();
-            String mainClassName = mainAttributes.getValue("Main-Class");
+            String mainClassName = explicitMainClass != null ? explicitMainClass : mainAttributes.getValue("Main-Class");
             if (mainClassName == null || mainClassName.isBlank()) {
-                throw new IOException(inputJar + " has no Main-Class attribute.");
+                // Minecraft's own client.jar (and most historical server.jar builds, pre-bundler)
+                // were never meant to be run with `java -jar` at all - the vanilla launcher always
+                // invokes them via `-cp` with the main class name passed explicitly on the command
+                // line (from that version's own manifest.json "mainClass" field), so there's often
+                // genuinely nothing to read here.
+                throw new IOException(inputJar + " has no Main-Class attribute, and none was given explicitly. "
+                        + "Most Minecraft jars don't declare one - pass the main class from that version's "
+                        + "own version manifest (its \"mainClass\" field), e.g. net.minecraft.client.main.Main.");
             }
+            mainAttributes.putValue("Main-Class", mainClassName);
 
             mainAttributes.putValue("Launcher-Agent-Class", AGENT_CLASS);
             mainAttributes.putValue("Premain-Class", AGENT_CLASS);
