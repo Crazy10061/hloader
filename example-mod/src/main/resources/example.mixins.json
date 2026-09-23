@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "com.example.mixin",
+  "mixins": [
+    "RealServerMainMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

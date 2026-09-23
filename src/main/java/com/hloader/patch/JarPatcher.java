@@ -1,0 +1,120 @@
+package com.hloader.patch;
+
+import java.io.BufferedOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.CodeSource;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.jar.Attributes;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import java.util.jar.Manifest;
+
+/**
+ * It adds a {@code Launcher-Agent-Class}
+ * (and {@code Premain-Class}) manifest attribute so the JVM itself attaches
+ * hloader as a {@link java.lang.instrument} agent before the target's own
+ * {@code main()} runs, then embeds hloader's own runtime (agent, mod loader,
+ * Mixin, and their dependencies) into the target jar so the result runs
+ * completely standalone via {@code java -jar}.
+ */
+public final class JarPatcher {
+
+    private static final String AGENT_CLASS = "com.hloader.agent.HloaderAgent";
+
+    private JarPatcher() {
+    }
+
+    public static void patch(Path inputJar, Path outputJar) throws IOException {
+        try (JarFile in = new JarFile(inputJar.toFile())) {
+            Manifest manifest = in.getManifest();
+            if (manifest == null) {
+                throw new IOException(inputJar + " has no manifest.");
+            }
+            Attributes mainAttributes = manifest.getMainAttributes();
+            String mainClassName = mainAttributes.getValue("Main-Class");
+            if (mainClassName == null || mainClassName.isBlank()) {
+                throw new IOException(inputJar + " has no Main-Class attribute.");
+            }
+
+            mainAttributes.putValue("Launcher-Agent-Class", AGENT_CLASS);
+            mainAttributes.putValue("Premain-Class", AGENT_CLASS);
+            mainAttributes.putValue("Can-Retransform-Classes", "true");
+
+            if (outputJar.getParent() != null) {
+                Files.createDirectories(outputJar.getParent());
+            }
+
+            Set<String> written = new HashSet<>();
+            try (JarOutputStream out = new JarOutputStream(new BufferedOutputStream(Files.newOutputStream(outputJar)), manifest)) {
+                written.add("META-INF/MANIFEST.MF");
+
+                Enumeration<JarEntry> entries = in.entries();
+                while (entries.hasMoreElements()) {
+                    JarEntry entry = entries.nextElement();
+                    String name = entry.getName();
+                    if (entry.isDirectory() || name.equals("META-INF/MANIFEST.MF") || !written.add(name)) {
+                        continue;
+                    }
+                    byte[] data;
+                    try (InputStream entryStream = in.getInputStream(entry)) {
+                        data = entryStream.readAllBytes();
+                    }
+                    writeEntry(out, name, data);
+                }
+
+                try (JarFile ownJar = openOwnJar()) {
+                    Enumeration<JarEntry> ownEntries = ownJar.entries();
+                    while (ownEntries.hasMoreElements()) {
+                        JarEntry entry = ownEntries.nextElement();
+                        String name = entry.getName();
+                        if (entry.isDirectory() || !isEmbeddable(name) || !written.add(name)) {
+                            continue;
+                        }
+                        byte[] data;
+                        try (InputStream entryStream = ownJar.getInputStream(entry)) {
+                            data = entryStream.readAllBytes();
+                        }
+                        writeEntry(out, name, data);
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean isEmbeddable(String name) {
+        if (name.equals("META-INF/MANIFEST.MF") || name.equals("module-info.class")) {
+            return false;
+        }
+        return !(name.endsWith(".SF") || name.endsWith(".RSA") || name.endsWith(".DSA"));
+    }
+
+    private static JarFile openOwnJar() throws IOException {
+        CodeSource codeSource = JarPatcher.class.getProtectionDomain().getCodeSource();
+        if (codeSource == null) {
+            throw new IOException("Can't locate hloader's own jar (no code source) — run hloader from its built jar.");
+        }
+        try {
+            Path ownPath = Path.of(codeSource.getLocation().toURI());
+            if (!Files.isRegularFile(ownPath)) {
+                throw new IOException("hloader isn't running from a jar (" + ownPath
+                        + ") — build and run the fat jar (./gradlew shadowJar) instead of running from compiled classes.");
+            }
+            return new JarFile(ownPath.toFile());
+        } catch (URISyntaxException e) {
+            throw new IOException("Couldn't resolve hloader's own jar location", e);
+        }
+    }
+
+    private static void writeEntry(JarOutputStream out, String name, byte[] data) throws IOException {
+        out.putNextEntry(new JarEntry(name));
+        out.write(data);
+        out.closeEntry();
+    }
+}
