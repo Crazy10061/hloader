@@ -148,7 +148,13 @@ public class HloaderPlugin implements Plugin<Project> {
         project.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, task -> {
             task.dependsOn(generateMappingsTask);
             if (task instanceof JavaCompile javaCompile) {
-                javaCompile.getOptions().getCompilerArgs().addAll(List.of(
+                // A CommandLineArgumentProvider (not a plain List<String>) so these paths are
+                // resolved lazily at execution time, not eagerly during project configuration -
+                // eager resolution here forced a full re-resolution of GenerateMappings (network
+                // fetch included) on every Gradle invocation regardless of whether compileJava
+                // was even going to run, and could bake in a path from whatever minecraftVersion
+                // was configured at the time this configuration action last happened to fire.
+                javaCompile.getOptions().getCompilerArgumentProviders().add(() -> List.of(
                         "-AreobfNotchSrgFile=" + generateMappingsTask.get().getReobfSrgFile().get().getAsFile().getPath(),
                         "-AoutRefMapFile=" + refmapFile.get().getAsFile().getPath(),
                         "-AdefaultObfuscationEnv=notch"));

@@ -3,7 +3,7 @@ package com.example.mixin;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 
-import com.mojang.minecraft.Minecraft;
+import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
