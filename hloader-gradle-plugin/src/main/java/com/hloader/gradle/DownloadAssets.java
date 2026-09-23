@@ -23,8 +23,6 @@ import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.TaskAction;
-import org.gradle.internal.logging.progress.ProgressLogger;
-import org.gradle.internal.logging.progress.ProgressLoggerFactory;
 
 /**
  * Downloads a version's asset index and every asset object it references, laid out the same way
@@ -74,11 +72,14 @@ public abstract class DownloadAssets extends DefaultTask {
         int total = objects.size();
         AtomicInteger done = new AtomicInteger(0);
         AtomicInteger downloaded = new AtomicInteger(0);
+        // Gradle's ProgressLogger only ever renders on the ephemeral rich-console status line -
+        // invisible with --console=plain, in most CI logs, and in some IDE-embedded consoles.
+        // Plain getLogger().lifecycle() calls always show up, so progress is reported that way
+        // instead, at 10% steps to avoid spamming a line per object across tens of thousands of
+        // assets.
+        AtomicInteger lastLoggedPercent = new AtomicInteger(-1);
 
-        ProgressLoggerFactory factory = getServices().get(ProgressLoggerFactory.class);
-        ProgressLogger logger = factory.newOperation(getClass());
-
-        logger.start("downloading assets", "hloader: assets 0/" + total);
+        getLogger().lifecycle("hloader: downloading assets (0/" + total + ")");
 
         // i dont know how i came up with this, i just copy pasted some old code lol
         // - mangodev1
@@ -100,11 +101,14 @@ public abstract class DownloadAssets extends DefaultTask {
                         downloaded.getAndIncrement();
                     }
 
-                    done.getAndIncrement();
-
-                    logger.progress("hloader: assets " + done + "/" + total, false);
+                    int completedCount = done.incrementAndGet();
+                    int percent = completedCount * 100 / total;
+                    int previous = lastLoggedPercent.get();
+                    if (percent >= previous + 10 && lastLoggedPercent.compareAndSet(previous, percent)) {
+                        getLogger().lifecycle("hloader: assets " + percent + "% (" + completedCount + "/" + total + ")");
+                    }
                 } catch (Exception e) {
-                    logger.progress("hloader: error: " + e.getMessage(), true);
+                    getLogger().lifecycle("hloader: error downloading asset: " + e.getMessage());
                 }
 
                 return null;
@@ -115,6 +119,6 @@ public abstract class DownloadAssets extends DefaultTask {
         pool.shutdown();
         pool.close();
 
-        logger.completed("hloader: assets ready (" + total + " objects, " + downloaded + " newly downloaded)", false);
+        getLogger().lifecycle("hloader: assets ready (" + total + " objects, " + downloaded + " newly downloaded)");
     }
 }

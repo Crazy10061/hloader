@@ -17,6 +17,7 @@ record MinecraftVersionInfo(
         String downloadUrl,
         String assetIndexId,
         String assetIndexUrl,
+        String mappingsUrl,
         List<LibraryInfo> libraries,
         boolean dedicatedServer
 ) {

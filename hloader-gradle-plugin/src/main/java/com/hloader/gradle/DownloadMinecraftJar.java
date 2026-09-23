@@ -3,7 +3,9 @@ package com.hloader.gradle;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
+import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import org.gradle.api.DefaultTask;
@@ -49,9 +51,31 @@ public abstract class DownloadMinecraftJar extends DefaultTask {
         getLogger().lifecycle("hloader: downloading Minecraft " + resolvedInfo().versionId() + " " + getSide().get()
                 + ".jar from " + resolvedInfo().downloadUrl());
         Files.createDirectories(output.getParentFile().toPath());
-        try (InputStream in = URI.create(resolvedInfo().downloadUrl()).toURL().openStream()) {
-            Files.copy(in, output.toPath(), StandardCopyOption.REPLACE_EXISTING);
+
+        URLConnection connection = URI.create(resolvedInfo().downloadUrl()).toURL().openConnection();
+        long totalBytes = connection.getContentLengthLong();
+        File tempFile = new File(output.getParentFile(), output.getName() + ".part");
+        byte[] buffer = new byte[1 << 16];
+        long copied = 0;
+        int lastLoggedPercent = -1;
+        try (InputStream in = connection.getInputStream();
+                OutputStream out = Files.newOutputStream(tempFile.toPath())) {
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+                copied += read;
+                if (totalBytes > 0) {
+                    int percent = (int) (copied * 100 / totalBytes);
+                    if (percent >= lastLoggedPercent + 10) {
+                        lastLoggedPercent = percent;
+                        getLogger().lifecycle("hloader: " + getSide().get() + ".jar " + percent + "% ("
+                                + (copied / 1_048_576) + "/" + (totalBytes / 1_048_576) + " MB)");
+                    }
+                }
+            }
         }
+        Files.move(tempFile.toPath(), output.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        getLogger().lifecycle("hloader: " + getSide().get() + ".jar downloaded (" + (copied / 1_048_576) + " MB)");
     }
 
     private MinecraftVersionInfo resolvedInfo() {

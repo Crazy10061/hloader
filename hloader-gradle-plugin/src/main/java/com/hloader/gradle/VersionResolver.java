@@ -107,6 +107,10 @@ final class VersionResolver {
             assetIndexUrl = assetIndex.get("url").getAsString();
         }
 
+        String mappingsKey = side + "_mappings";
+        String mappingsUrl = downloads != null && downloads.has(mappingsKey)
+                ? downloads.getAsJsonObject(mappingsKey).get("url").getAsString() : null;
+
         List<LibraryInfo> libraries = new ArrayList<>();
         if (versionJson.has("libraries")) {
             JsonArray libraryArray = versionJson.getAsJsonArray("libraries");
@@ -122,7 +126,7 @@ final class VersionResolver {
             libraries = withMcpHackersLaunchWrapper(libraries);
         }
 
-        return new MinecraftVersionInfo(versionId, mainClass, downloadUrl, assetIndexId, assetIndexUrl, libraries, dedicatedServer);
+        return new MinecraftVersionInfo(versionId, mainClass, downloadUrl, assetIndexId, assetIndexUrl, mappingsUrl, libraries, dedicatedServer);
     }
 
     /**
@@ -281,6 +285,24 @@ final class VersionResolver {
             return "osx";
         }
         return "linux";
+    }
+
+    /** Returns the response body, or {@code null} on a 404 (used for "does this even exist" probes). */
+    static byte[] fetchBytesOrNull(String url) {
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url)).GET().build();
+            HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() == 404) {
+                return null;
+            }
+            if (response.statusCode() != 200) {
+                throw new IOException("GET " + url + " -> HTTP " + response.statusCode());
+            }
+            return response.body();
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException("Failed to fetch " + url, e);
+        }
     }
 
     static String fetch(String url) {

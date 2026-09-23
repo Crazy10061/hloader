@@ -22,8 +22,6 @@ import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.Internal;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.TaskAction;
-import org.gradle.internal.logging.progress.ProgressLogger;
-import org.gradle.internal.logging.progress.ProgressLoggerFactory;
 
 /** Downloads a version's (OS-filtered) library jars and extracts any native (.so/.dll/.dylib) libraries out of them. */
 public abstract class DownloadLibraries extends DefaultTask {
@@ -57,13 +55,15 @@ public abstract class DownloadLibraries extends DefaultTask {
         Files.createDirectories(librariesDir.toPath());
         Files.createDirectories(nativesDir.toPath());
 
-        ProgressLoggerFactory factory = getServices().get(ProgressLoggerFactory.class);
-        ProgressLogger logger = factory.newOperation(getClass());
-
         AtomicInteger done = new AtomicInteger();
         int total = info.libraries().size();
+        // Gradle's ProgressLogger only ever renders on the ephemeral rich-console status line -
+        // invisible with --console=plain, in most CI logs, and in some IDE-embedded consoles.
+        // Plain getLogger().lifecycle() calls always show up, so progress is reported that way
+        // instead, at 10% steps.
+        AtomicInteger lastLoggedPercent = new AtomicInteger(-1);
 
-        logger.start("downloading libraries", "hloader: libraries " + done + "/" + total);
+        getLogger().lifecycle("hloader: downloading libraries (0/" + total + ")");
 
         // i dont know how i came up with this, i just copy pasted some old code lol
         // - mangodev1
@@ -87,11 +87,14 @@ public abstract class DownloadLibraries extends DefaultTask {
                         extractNatives(dest, nativesDir);
                     }
 
-                    done.getAndIncrement();
-
-                    logger.progress("hloader: libraries " + done + "/" + total);
+                    int completedCount = done.incrementAndGet();
+                    int percent = total == 0 ? 100 : completedCount * 100 / total;
+                    int previous = lastLoggedPercent.get();
+                    if (percent >= previous + 10 && lastLoggedPercent.compareAndSet(previous, percent)) {
+                        getLogger().lifecycle("hloader: libraries " + percent + "% (" + completedCount + "/" + total + ")");
+                    }
                 } catch (IOException e) {
-                    logger.progress("hloader: error: " + e.getMessage(), true);
+                    getLogger().lifecycle("hloader: error downloading library: " + e.getMessage());
                 }
 
                 return null;
@@ -102,7 +105,7 @@ public abstract class DownloadLibraries extends DefaultTask {
         pool.shutdown();
         pool.close();
 
-        logger.completed("hloader: " + total + " libraries ready in " + librariesDir, false);
+        getLogger().lifecycle("hloader: " + total + " libraries ready in " + librariesDir);
     }
 
     private void extractNatives(File jarFile, File nativesDir) throws IOException {

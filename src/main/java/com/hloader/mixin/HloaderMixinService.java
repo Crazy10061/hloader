@@ -5,6 +5,8 @@ import java.util.Collection;
 import java.util.Collections;
 import org.spongepowered.asm.launch.platform.container.ContainerHandleVirtual;
 import org.spongepowered.asm.launch.platform.container.IContainerHandle;
+import org.spongepowered.asm.logging.ILogger;
+import org.spongepowered.asm.logging.LoggerAdapterConsole;
 import org.spongepowered.asm.mixin.MixinEnvironment.Phase;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformerFactory;
 import org.spongepowered.asm.service.IClassBytecodeProvider;
@@ -40,8 +42,16 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
 
     @Override
     public Phase getInitialPhase() {
-        return Phase.DEFAULT;
+        // MixinBootstrap.start() checks this: if it's already Phase.DEFAULT, Mixin assumes its own
+        // subsystem was bootstrapped *after* the game's pre-init/mod-scanning phase already ran
+        // (normal for FML/LaunchWrapper, which transition PREINIT -> DEFAULT themselves once mod
+        // loading finishes) and logs "Initialising mixin subsystem after game pre-init phase! Some
+        // mixins may be skipped." - which is exactly what happened here, since this used to return
+        // Phase.DEFAULT even though hloader bootstraps and registers every config before the game's
+        // main() ever runs, i.e. still genuinely in pre-init.
+        return Phase.PREINIT;
     }
+
 
     @Override
     public void offer(IMixinInternal internal) {
@@ -53,6 +63,17 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
 
     public IMixinTransformerFactory getTransformerFactory() {
         return transformerFactory;
+    }
+
+    /** Called from {@code HloaderAgent} once the runtime obf&lt;-&gt;named class map is loaded. */
+    public static void setRuntimeClassMap(RuntimeClassMap classMap) {
+        HloaderBytecodeProvider.INSTANCE.setClassMap(classMap);
+    }
+
+    /** Called from {@code HloaderAgent} once every mod jar is scanned and its mixin configs are
+     * registered - see {@link HloaderPlatformAgent#advanceToDefaultPhase()}. */
+    public static void advanceToDefaultPhase() {
+        HloaderPlatformAgent.advanceToDefaultPhase();
     }
 
     @Override
@@ -82,7 +103,9 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
 
     @Override
     public Collection<String> getPlatformAgents() {
-        return Collections.emptyList();
+        // MixinServiceAbstract.getSideName() is final and only reads from an agent registered
+        // here - see HloaderPlatformAgent.
+        return Collections.singletonList("com.hloader.mixin.HloaderPlatformAgent");
     }
 
     @Override
@@ -93,5 +116,17 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
     @Override
     public InputStream getResourceAsStream(String name) {
         return ClassLoader.getSystemResourceAsStream(name);
+    }
+
+    /**
+     * {@code MixinServiceAbstract}'s own default ({@code LoggerAdapterDefault}) discards
+     * everything - the "Logger Adapter Type: Default Logger (No Logging)" line in Mixin's startup
+     * banner is this. That silently swallows Mixin's own warnings when e.g. an {@code @Inject}
+     * target can't be resolved at runtime, making a real application failure look identical to a
+     * mixin quietly doing nothing.
+     */
+    @Override
+    protected ILogger createLogger(String name) {
+        return new LoggerAdapterConsole(name);
     }
 }

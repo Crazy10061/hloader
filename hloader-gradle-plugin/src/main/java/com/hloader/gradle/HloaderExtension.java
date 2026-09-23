@@ -21,4 +21,16 @@ public interface HloaderExtension {
      * the untouched vanilla behavior instead.
      */
     Property<Boolean> getPatchLegacyLaunchWrapper();
+
+    /**
+     * Versions old enough to have no official Mojang mappings fall back to Forge/MCP's
+     * {@code joined.srg}, which only gives SRG intermediate names ({@code field_147145_h},
+     * {@code func_70071_a_}) - real human names need MCP's separately-versioned
+     * {@code mcp_stable} CSV data layered on top. Set this to the numeric revision (e.g.
+     * {@code "12"} for Minecraft 1.7.10's {@code mcp_stable:12-1.7.10}) to pick a specific
+     * mapping revision; leave unset to auto-resolve the newest {@code mcp_stable} revision
+     * published for the current {@code minecraftVersion}. Versions with real official Mojang
+     * mappings ignore this entirely (they're already human-readable).
+     */
+    Property<String> getMcpMappingVersion();
 }

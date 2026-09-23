@@ -64,6 +64,7 @@ public abstract class RunDevServer extends DefaultTask {
             spec.setWorkingDir(runDir.toFile());
             spec.commandLine("java");
             spec.args("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
+            spec.args("-Dhloader.side=SERVER");
             if (Boolean.TRUE.equals(getExportMixins().getOrElse(false))) {
                 spec.args("-Dmixin.debug.export=true");
             }

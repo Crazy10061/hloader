@@ -32,8 +32,14 @@ final class HloaderBytecodeProvider implements IClassBytecodeProvider {
     static final HloaderBytecodeProvider INSTANCE = new HloaderBytecodeProvider();
 
     private final ConcurrentHashMap<String, JarFile> openJars = new ConcurrentHashMap<>();
+    private volatile RuntimeClassMap classMap = RuntimeClassMap.EMPTY;
 
     private HloaderBytecodeProvider() {
+    }
+
+    /** Set once, from {@code HloaderAgent}, as soon as the runtime obf<->named class map loads. */
+    void setClassMap(RuntimeClassMap classMap) {
+        this.classMap = classMap;
     }
 
     @Override
@@ -48,7 +54,12 @@ final class HloaderBytecodeProvider implements IClassBytecodeProvider {
 
     @Override
     public ClassNode getClassNode(String name, boolean runTransformers, int readerFlags) throws ClassNotFoundException, IOException {
-        String resource = name.replace('.', '/') + ".class";
+        // Mixin asks for this by whatever name it currently has in hand - sometimes the class's
+        // real (obfuscated) name, sometimes a @Mixin target's declared named/deobfuscated name
+        // (e.g. resolving the target class itself, before any per-member remapping happens) - but
+        // the classpath only ever has the obfuscated one on disk.
+        String obfName = classMap.toObfuscatedName(name.replace('/', '.')).replace('.', '/');
+        String resource = obfName + ".class";
         try (InputStream in = openClasspathResource(resource)) {
             if (in == null) {
                 throw new ClassNotFoundException(name);

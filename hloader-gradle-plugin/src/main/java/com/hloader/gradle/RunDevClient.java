@@ -79,6 +79,15 @@ public abstract class RunDevClient extends DefaultTask {
             spec.classpath(classpath);
             spec.jvmArgs("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
             spec.jvmArgs("-Djava.library.path=" + getNativesDir().get().getAsFile().getPath());
+            spec.jvmArgs("-Dhloader.side=CLIENT");
+            if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac")) {
+                // macOS's Cocoa windowing only allows UI/video-device calls from the process's
+                // actual first thread - GLFW/SDL (used by modern Minecraft's RenderSystem) fails
+                // with "Unable to initialize SDL: No available video device" without this, even
+                // with a real display attached, since a JVM's main thread isn't its first OS
+                // thread unless told to be.
+                spec.jvmArgs("-XstartOnFirstThread");
+            }
 
             Package pkg = getClass().getPackage();
             String name = pkg.getName();
@@ -97,7 +106,11 @@ public abstract class RunDevClient extends DefaultTask {
                     "--uuid", uuid,
                     "--accessToken", "0",
                     "--userType", "legacy",
-                    "--versionType", "release");
+                    "--versionType", "release",
+                    // Older (pre-1.8-ish) client mains mark this as a *required* joptsimple option
+                    // even though nothing meaningful reads it today - an empty JSON object is what
+                    // the vanilla launcher itself sends when there's nothing to report.
+                    "--userProperties", "{}");
             spec.setWorkingDir(runDir.toFile());
             spec.setIgnoreExitValue(true);
         });

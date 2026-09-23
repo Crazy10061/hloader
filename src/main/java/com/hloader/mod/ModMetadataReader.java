@@ -1,10 +1,14 @@
 package com.hloader.mod;
 
-import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -13,7 +17,6 @@ import java.util.jar.JarFile;
 final class ModMetadataReader {
 
     private static final String METADATA_ENTRY = "hloader.mod.json";
-    private static final Gson GSON = new Gson();
 
     private ModMetadataReader() {
     }
@@ -25,20 +28,43 @@ final class ModMetadataReader {
             if (entry == null) {
                 return null;
             }
-            ModMetadata metadata;
+            JsonObject json;
+            // Deliberately not Gson.fromJson(reader, ModMetadata.class): binding straight to a
+            // record triggers Gson's reflective RecordAdapter, whose static initializer calls
+            // Byte.valueOf(). This runs inside the agent's premain(), before the JVM has finished
+            // its own bootstrap - at that exact moment, that specific reflective path causes a
+            // ClassCircularityError on java.lang.Byte$ByteCache (a JVM-timing hazard, not a bug in
+            // Gson or our code). Parsing through the plain JsonObject API sidesteps it entirely.
             try (var reader = new InputStreamReader(jarFile.getInputStream(entry), StandardCharsets.UTF_8)) {
-                metadata = GSON.fromJson(reader, ModMetadata.class);
+                json = JsonParser.parseReader(reader).getAsJsonObject();
             }
-            if (metadata == null || metadata.id() == null || metadata.entrypoint() == null) {
+
+            String id = getString(json, "id");
+            String entrypoint = getString(json, "entrypoint");
+            if (id == null || entrypoint == null) {
                 throw new IOException(jarPath + "'s " + METADATA_ENTRY + " is missing \"id\" or \"entrypoint\".");
             }
-            if (metadata.depends() == null) {
-                metadata = new ModMetadata(metadata.id(), metadata.version(), metadata.entrypoint(), List.of());
-            }
-            if (metadata.version() == null) {
-                metadata = new ModMetadata(metadata.id(), "0.0.0", metadata.entrypoint(), metadata.depends());
-            }
-            return metadata;
+            String version = getString(json, "version");
+            List<String> depends = getStringList(json, "depends");
+
+            return new ModMetadata(id, version == null ? "0.0.0" : version, entrypoint, depends);
         }
+    }
+
+    private static String getString(JsonObject json, String key) {
+        JsonElement element = json.get(key);
+        return element == null || element.isJsonNull() ? null : element.getAsString();
+    }
+
+    private static List<String> getStringList(JsonObject json, String key) {
+        JsonElement element = json.get(key);
+        if (element == null || element.isJsonNull() || !element.isJsonArray()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (JsonElement item : (JsonArray) element) {
+            result.add(item.getAsString());
+        }
+        return result;
     }
 }
