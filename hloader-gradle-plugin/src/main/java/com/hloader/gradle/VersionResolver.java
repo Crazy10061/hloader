@@ -343,6 +343,24 @@ public final class VersionResolver {
         }
     }
 
+    /** Returns the response body, or {@code null} on a 404 (used for "does this even exist" probes). */
+    public static String fetchOrNull(String url) {
+        try {
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url)).GET().build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 404) {
+                return null;
+            }
+            if (response.statusCode() != 200) {
+                throw new IOException("GET " + url + " -> HTTP " + response.statusCode());
+            }
+            return response.body();
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException("Failed to fetch " + url, e);
+        }
+    }
+
     public static String fetch(String url) {
         try {
             HttpClient client = HttpClient.newHttpClient();

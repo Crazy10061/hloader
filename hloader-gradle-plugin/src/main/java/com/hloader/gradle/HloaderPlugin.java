@@ -42,6 +42,7 @@ public class HloaderPlugin implements Plugin<Project> {
         HloaderExtension extension = project.getExtensions().create("hloader", HloaderExtension.class);
         extension.getMinecraftVersion().convention("latest");
         extension.getPatchLegacyLaunchWrapper().convention(true);
+        extension.getMappingProvider().convention("auto");
 
         TaskProvider<DownloadMinecraftJar> downloadServerJarTask = project.getTasks().register(
                 "downloadMinecraftJar", DownloadMinecraftJar.class, task -> {
@@ -93,6 +94,7 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getClientVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
                     task.getGameJar().set(mergeGameJarsTask.flatMap(MergeGameJars::getOutputJar));
                     task.getMcpMappingVersion().set(extension.getMcpMappingVersion());
+                    task.getMappingProvider().set(extension.getMappingProvider());
                     task.getSrgFile().set(project.getLayout().getBuildDirectory().file(versionSegment.map(v -> "hloader/" + v + "/mappings.srg")));
                     task.getReobfSrgFile().set(project.getLayout().getBuildDirectory().file(versionSegment.map(v -> "hloader/" + v + "/mappings-reobf.srg")));
                 });

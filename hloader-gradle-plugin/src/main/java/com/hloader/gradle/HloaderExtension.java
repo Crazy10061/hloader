@@ -33,4 +33,22 @@ public interface HloaderExtension {
      * mappings ignore this entirely (they're already human-readable).
      */
     Property<String> getMcpMappingVersion();
+
+    /**
+     * Which mapping source {@link com.hloader.gradle.tasks.GenerateMappings} should use:
+     * <ul>
+     * <li>{@code "auto"} (the default) - Mojang's official mappings when available, else Forge/MCP's
+     * {@code joined.srg}+{@code mcp_stable}, else OrnitheMC's {@code feather}, else Legacy Fabric's
+     * {@code intermediary}+{@code yarn} (whichever of these actually has real human names first), else
+     * raw obfuscated names.</li>
+     * <li>{@code "mojang"} - require Mojang's official mappings; fails if this version doesn't have any (pre-1.14.4).</li>
+     * <li>{@code "mcp"} - require Forge/MCP's {@code joined.srg} (+ {@code mcp_stable} if available); fails below 1.6.4.</li>
+     * <li>{@code "ornithe"} - require OrnitheMC's {@code feather}; fails outside roughly c0.0.12a_03-1.14.4.</li>
+     * <li>{@code "legacy-fabric"} - require Legacy Fabric's {@code intermediary}+{@code yarn}; fails outside roughly 1.3.2-1.13.2.</li>
+     * <li>{@code "none"} - skip deobfuscation entirely, keep raw obfuscated names.</li>
+     * </ul>
+     * Set this when you specifically want one source over another - e.g. Legacy Fabric's Yarn
+     * names instead of MCP's for a version both cover, like 1.12.2.
+     */
+    Property<String> getMappingProvider();
 }
