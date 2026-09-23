@@ -38,13 +38,20 @@ final class ModMetadataReader {
 
             String id = getString(json, "id");
             String entrypoint = getString(json, "entrypoint");
-            if (id == null || entrypoint == null) {
-                throw new IOException(jarPath + "'s " + METADATA_ENTRY + " is missing \"id\" or \"entrypoint\".");
+            String asmEntrypoint = getString(json, "asmEntrypoint");
+            String accessTransformer = getString(json, "accessTransformer");
+            if (id == null) {
+                throw new IOException(jarPath + "'s " + METADATA_ENTRY + " is missing \"id\".");
+            }
+            if (entrypoint == null && asmEntrypoint == null && accessTransformer == null) {
+                throw new IOException(jarPath + "'s " + METADATA_ENTRY + " must declare at least one of "
+                        + "\"entrypoint\", \"asmEntrypoint\" or \"accessTransformer\".");
             }
             String version = getString(json, "version");
             List<String> depends = getStringList(json, "depends");
 
-            return new ModMetadata(id, version == null ? "0.0.0" : version, entrypoint, depends);
+            return new ModMetadata(id, version == null ? "0.0.0" : version, entrypoint, asmEntrypoint,
+                    accessTransformer, depends);
         }
     }
 

@@ -7,6 +7,7 @@ import com.hloader.launch.LegacyTweakerClassLoaderBridge;
 import com.hloader.mixin.HloaderMixinService;
 import com.hloader.mixin.RuntimeClassMap;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.instrument.ClassFileTransformer;
 import java.lang.instrument.IllegalClassFormatException;
 import java.lang.instrument.Instrumentation;
@@ -16,8 +17,10 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.jar.Manifest;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.commons.ClassRemapper;
@@ -78,16 +81,32 @@ public final class HloaderAgent {
         instrumentation.addTransformer(new LegacyClassLoaderCastTransformer(), false);
         instrumentation.addTransformer(new LegacyTweakerClassLoaderBridge(), false);
 
+        // -Dhloader.side is only ever set by RunDevClient/RunDevServer's Gradle dev tasks. A jar
+        // installed via JarPatcher and run through a real launcher never gets it, which otherwise
+        // leaves Mixin's side detection stuck on UNKNOWN for every non-dev install.
+        if (System.getProperty("hloader.side") == null) {
+            String detected = detectSide();
+            if (detected != null) {
+                System.setProperty("hloader.side", detected);
+            }
+        }
+
         List<Path> modJars = Hook.findModJars();
         appendToClasspath(instrumentation, modJars);
 
-        // Hook.boot() parses hloader.mod.json via Gson, which does its own classloading -
-        // registering the Mixin transformer before that finishes risks routing it reentrantly
-        // through Mixin's lazy ClassInfo/Guava bootstrap (ClassCircularityError).
-        Hook.boot(modJars);
-
+        // RuntimeClassMap.load() only reads jar files directly (no classloading), so computing it
+        // before Hook.boot() is safe - Hook.boot() needs it to translate access-transformer rules'
+        // named class/member references to the runtime obfuscated ones.
         RuntimeClassMap classMap = RuntimeClassMap.load(modJars);
         HloaderMixinService.setRuntimeClassMap(classMap);
+
+        // Hook.boot() parses hloader.mod.json via Gson, which does its own classloading -
+        // registering the Mixin transformer before that finishes risks routing it reentrantly
+        // through Mixin's lazy ClassInfo/Guava bootstrap (ClassCircularityError). The
+        // access-transformer/raw-ASM transformers Hook.boot() itself registers don't have that
+        // hazard (they don't touch Mixin's internals), so it registers those directly.
+        Hook.boot(modJars, instrumentation, classMap);
+
         IMixinTransformer transformer = initMixin(modJars);
         if (transformer != null) {
             instrumentation.addTransformer(new MixinClassFileTransformer(transformer, classMap), false);
@@ -98,6 +117,15 @@ public final class HloaderAgent {
         System.out.flush();
     }
 
+    /**
+     * Mod jars still go on the system classpath - Mixin's own internal validation (not just
+     * {@code HloaderBytecodeProvider}'s ASM-based reading) needs that broader visibility, as
+     * removing it entirely broke real {@code @Mixin} application ("missing an @Mixin annotation").
+     * Real per-mod isolation still happens at {@code Hook.boot()}: each mod's entrypoint loads
+     * through its own {@code ModClassLoader}, which is child-first for the mod's own code, so it
+     * still prefers a mod's own bundled dependency classes over whatever else is on this shared
+     * classpath - which is what actually prevents mod-vs-mod dependency collisions in practice.
+     */
     private static void appendToClasspath(Instrumentation instrumentation, List<Path> jars) {
         for (Path jar : jars) {
             try {
@@ -106,6 +134,43 @@ public final class HloaderAgent {
             } catch (IOException e) {
                 System.err.println("hloader: failed to add " + jar + " to the classpath: " + e.getMessage());
             }
+        }
+    }
+
+    /**
+     * The vanilla launcher always passes client-only flags ({@code --assetsDir}, etc.) regardless
+     * of Minecraft version or whether the version uses LaunchWrapper - checking the actual launch
+     * command is more reliable than the jar's own {@code Main-Class} (LaunchWrapper's is the same
+     * literal class for both sides). Falls back to {@code Main-Class} for the rare case a
+     * dedicated server's launch command happens to look client-ish, or vice versa.
+     */
+    private static String detectSide() {
+        String command = System.getProperty("sun.java.command", "");
+        if (command.contains("--assetsDir") || command.contains("--accessToken") || command.contains("--userType")) {
+            return "CLIENT";
+        }
+
+        String mainClass = readOwnManifestMainClass();
+        if (mainClass != null) {
+            String lower = mainClass.toLowerCase(Locale.ROOT);
+            if (lower.contains("server")) {
+                return "SERVER";
+            }
+            if (lower.contains("client")) {
+                return "CLIENT";
+            }
+        }
+        return null;
+    }
+
+    private static String readOwnManifestMainClass() {
+        try (InputStream in = HloaderAgent.class.getResourceAsStream("/META-INF/MANIFEST.MF")) {
+            if (in == null) {
+                return null;
+            }
+            return new Manifest(in).getMainAttributes().getValue("Main-Class");
+        } catch (IOException e) {
+            return null;
         }
     }
 

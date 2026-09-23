@@ -1,5 +1,6 @@
 package com.hloader.gradle;
 
+import com.hloader.gradle.tasks.CheckVersion;
 import com.hloader.gradle.tasks.DownloadAssets;
 import com.hloader.gradle.tasks.DownloadLibraries;
 import com.hloader.gradle.tasks.DownloadMinecraftJar;
@@ -42,6 +43,7 @@ public class HloaderPlugin implements Plugin<Project> {
         HloaderExtension extension = project.getExtensions().create("hloader", HloaderExtension.class);
         extension.getMinecraftVersion().convention("latest");
         extension.getPatchLegacyLaunchWrapper().convention(true);
+        extension.getMappingProvider().convention("auto");
 
         TaskProvider<DownloadMinecraftJar> downloadServerJarTask = project.getTasks().register(
                 "downloadMinecraftJar", DownloadMinecraftJar.class, task -> {
@@ -61,6 +63,23 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getPatchLegacyLaunchWrapper().set(extension.getPatchLegacyLaunchWrapper());
                     task.getSide().set("client");
                 });
+
+        var clientVersionSegment = project.getLayout().file(downloadClientJarTask.map(DownloadMinecraftJar::getOutputJar))
+                .map(f -> f.getAsFile().getParentFile().getName());
+
+        project.getTasks().register("checkVersion", CheckVersion.class, task -> {
+            task.setGroup("hloader");
+            task.setDescription("Prints what hloader knows about the configured minecraftVersion: dedicated "
+                    + "server availability, LaunchWrapper patch applicability, and which mapping sources are available.");
+            task.getServerVersionInfo().set(project.provider(downloadServerJarTask.get()::getVersionInfo));
+            task.getClientVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
+            task.getPatchLegacyLaunchWrapper().set(extension.getPatchLegacyLaunchWrapper());
+            task.getMappingProviderSetting().set(task.getClientVersionInfo().map(info -> {
+                String override = extension.getMappingProviderOverrides().get().get(info.versionId());
+                return override != null ? override : extension.getMappingProvider().get();
+            }));
+            task.getOutputs().upToDateWhen(t -> false);
+        });
 
         TaskProvider<ExtractGameJar> extractGameJarTask = project.getTasks().register(
                 "extractGameJar", ExtractGameJar.class, task -> {
@@ -93,6 +112,10 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getClientVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
                     task.getGameJar().set(mergeGameJarsTask.flatMap(MergeGameJars::getOutputJar));
                     task.getMcpMappingVersion().set(extension.getMcpMappingVersion());
+                    task.getMappingProvider().set(task.getVersionInfo().map(info -> {
+                        String override = extension.getMappingProviderOverrides().get().get(info.versionId());
+                        return override != null ? override : extension.getMappingProvider().get();
+                    }));
                     task.getSrgFile().set(project.getLayout().getBuildDirectory().file(versionSegment.map(v -> "hloader/" + v + "/mappings.srg")));
                     task.getReobfSrgFile().set(project.getLayout().getBuildDirectory().file(versionSegment.map(v -> "hloader/" + v + "/mappings-reobf.srg")));
                 });
@@ -125,7 +148,13 @@ public class HloaderPlugin implements Plugin<Project> {
         project.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, task -> {
             task.dependsOn(generateMappingsTask);
             if (task instanceof JavaCompile javaCompile) {
-                javaCompile.getOptions().getCompilerArgs().addAll(List.of(
+                // A CommandLineArgumentProvider (not a plain List<String>) so these paths are
+                // resolved lazily at execution time, not eagerly during project configuration -
+                // eager resolution here forced a full re-resolution of GenerateMappings (network
+                // fetch included) on every Gradle invocation regardless of whether compileJava
+                // was even going to run, and could bake in a path from whatever minecraftVersion
+                // was configured at the time this configuration action last happened to fire.
+                javaCompile.getOptions().getCompilerArgumentProviders().add(() -> List.of(
                         "-AreobfNotchSrgFile=" + generateMappingsTask.get().getReobfSrgFile().get().getAsFile().getPath(),
                         "-AoutRefMapFile=" + refmapFile.get().getAsFile().getPath(),
                         "-AdefaultObfuscationEnv=notch"));
@@ -160,8 +189,12 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
                     task.getLibraryPaths().set(task.getVersionInfo().map(
                             v -> v.libraries().stream().map(LibraryInfo::path).toList()));
-                    task.getLibrariesDir().set(project.getLayout().getBuildDirectory().dir("hloader/clientLibraries"));
-                    task.getNativesDir().set(project.getLayout().getBuildDirectory().dir("hloader/clientNatives"));
+                    // Version-keyed (unlike assets, which are content-addressed and safe to share):
+                    // native library FILENAMES aren't content-addressed, so a stale wrong-version
+                    // (or wrong-arch) .dll/.so left over from a previous minecraftVersion could
+                    // otherwise sit in a shared directory until something happens to overwrite it.
+                    task.getLibrariesDir().set(project.getLayout().getBuildDirectory().dir(clientVersionSegment.map(v -> "hloader/" + v + "/clientLibraries")));
+                    task.getNativesDir().set(project.getLayout().getBuildDirectory().dir(clientVersionSegment.map(v -> "hloader/" + v + "/clientNatives")));
                 });
 
         TaskProvider<DownloadAssets> downloadAssetsTask = project.getTasks().register(
