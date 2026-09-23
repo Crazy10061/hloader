@@ -1,5 +1,6 @@
 package com.hloader.gradle;
 
+import org.gradle.api.provider.MapProperty;
 import org.gradle.api.provider.Property;
 
 /** {@code hloader { minecraftVersion.set("26.3") } } — "latest" resolves the current release. */
@@ -51,4 +52,14 @@ public interface HloaderExtension {
      * names instead of MCP's for a version both cover, like 1.12.2.
      */
     Property<String> getMappingProvider();
+
+    /**
+     * Per-version overrides for {@link #getMappingProvider()}, keyed by exact
+     * {@code minecraftVersion} id (e.g. {@code mappingProviderOverrides.put("1.0", "legacy-fabric")}).
+     * Useful when a project spans several versions (or you flip {@code minecraftVersion} around
+     * while testing) and different ones need different sources - an entry here wins over the
+     * global {@link #getMappingProvider()} for that one version only; every other version keeps
+     * using the global setting.
+     */
+    MapProperty<String, String> getMappingProviderOverrides();
 }

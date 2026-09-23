@@ -1,5 +1,6 @@
 package com.hloader.gradle;
 
+import com.hloader.gradle.tasks.CheckVersion;
 import com.hloader.gradle.tasks.DownloadAssets;
 import com.hloader.gradle.tasks.DownloadLibraries;
 import com.hloader.gradle.tasks.DownloadMinecraftJar;
@@ -63,6 +64,23 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getSide().set("client");
                 });
 
+        var clientVersionSegment = project.getLayout().file(downloadClientJarTask.map(DownloadMinecraftJar::getOutputJar))
+                .map(f -> f.getAsFile().getParentFile().getName());
+
+        project.getTasks().register("checkVersion", CheckVersion.class, task -> {
+            task.setGroup("hloader");
+            task.setDescription("Prints what hloader knows about the configured minecraftVersion: dedicated "
+                    + "server availability, LaunchWrapper patch applicability, and which mapping sources are available.");
+            task.getServerVersionInfo().set(project.provider(downloadServerJarTask.get()::getVersionInfo));
+            task.getClientVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
+            task.getPatchLegacyLaunchWrapper().set(extension.getPatchLegacyLaunchWrapper());
+            task.getMappingProviderSetting().set(task.getClientVersionInfo().map(info -> {
+                String override = extension.getMappingProviderOverrides().get().get(info.versionId());
+                return override != null ? override : extension.getMappingProvider().get();
+            }));
+            task.getOutputs().upToDateWhen(t -> false);
+        });
+
         TaskProvider<ExtractGameJar> extractGameJarTask = project.getTasks().register(
                 "extractGameJar", ExtractGameJar.class, task -> {
                     task.dependsOn(downloadServerJarTask);
@@ -94,7 +112,10 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getClientVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
                     task.getGameJar().set(mergeGameJarsTask.flatMap(MergeGameJars::getOutputJar));
                     task.getMcpMappingVersion().set(extension.getMcpMappingVersion());
-                    task.getMappingProvider().set(extension.getMappingProvider());
+                    task.getMappingProvider().set(task.getVersionInfo().map(info -> {
+                        String override = extension.getMappingProviderOverrides().get().get(info.versionId());
+                        return override != null ? override : extension.getMappingProvider().get();
+                    }));
                     task.getSrgFile().set(project.getLayout().getBuildDirectory().file(versionSegment.map(v -> "hloader/" + v + "/mappings.srg")));
                     task.getReobfSrgFile().set(project.getLayout().getBuildDirectory().file(versionSegment.map(v -> "hloader/" + v + "/mappings-reobf.srg")));
                 });
@@ -162,8 +183,12 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getVersionInfo().set(project.provider(downloadClientJarTask.get()::getVersionInfo));
                     task.getLibraryPaths().set(task.getVersionInfo().map(
                             v -> v.libraries().stream().map(LibraryInfo::path).toList()));
-                    task.getLibrariesDir().set(project.getLayout().getBuildDirectory().dir("hloader/clientLibraries"));
-                    task.getNativesDir().set(project.getLayout().getBuildDirectory().dir("hloader/clientNatives"));
+                    // Version-keyed (unlike assets, which are content-addressed and safe to share):
+                    // native library FILENAMES aren't content-addressed, so a stale wrong-version
+                    // (or wrong-arch) .dll/.so left over from a previous minecraftVersion could
+                    // otherwise sit in a shared directory until something happens to overwrite it.
+                    task.getLibrariesDir().set(project.getLayout().getBuildDirectory().dir(clientVersionSegment.map(v -> "hloader/" + v + "/clientLibraries")));
+                    task.getNativesDir().set(project.getLayout().getBuildDirectory().dir(clientVersionSegment.map(v -> "hloader/" + v + "/clientNatives")));
                 });
 
         TaskProvider<DownloadAssets> downloadAssetsTask = project.getTasks().register(

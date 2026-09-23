@@ -51,20 +51,43 @@ public final class VersionResolver {
             "https://github.com/r58Playz/jinput-m1/raw/main/plugins/OSX/bin/jinput-platform-2.0.5.jar"
     );
 
+    /**
+     * The manifest is the same ~1MB JSON regardless of which side/version is being resolved, and
+     * a single build routinely resolves it more than once (at least once per
+     * {@code DownloadMinecraftJar} instance - server and client both need it). Caching it for the
+     * life of the JVM (the Gradle daemon, in practice) avoids re-fetching it needlessly; staleness
+     * isn't a practical concern since the manifest only grows (new versions get appended, existing
+     * ones are never rewritten) and a fresh daemon picks up anything new anyway.
+     */
+    private static volatile JsonObject cachedManifest;
+
     private VersionResolver() {
+    }
+
+    private static JsonObject manifest() {
+        JsonObject local = cachedManifest;
+        if (local == null) {
+            synchronized (VersionResolver.class) {
+                local = cachedManifest;
+                if (local == null) {
+                    local = JsonParser.parseString(fetch(MANIFEST_URL)).getAsJsonObject();
+                    cachedManifest = local;
+                }
+            }
+        }
+        return local;
     }
 
     static String resolveVersionId(String minecraftVersion) {
         if (!"latest".equals(minecraftVersion)) {
             return minecraftVersion;
         }
-        JsonObject manifest = JsonParser.parseString(fetch(MANIFEST_URL)).getAsJsonObject();
-        return manifest.getAsJsonObject("latest").get("release").getAsString();
+        return manifest().getAsJsonObject("latest").get("release").getAsString();
     }
 
     /** {@code side} is {@code "client"} or {@code "server"}. */
     public static MinecraftVersionInfo fetchVersionInfo(String minecraftVersion, String side, boolean patchLegacyLaunchWrapper) {
-        JsonObject manifest = JsonParser.parseString(fetch(MANIFEST_URL)).getAsJsonObject();
+        JsonObject manifest = manifest();
         String versionId = "latest".equals(minecraftVersion)
                 ? manifest.getAsJsonObject("latest").get("release").getAsString()
                 : minecraftVersion;
@@ -78,7 +101,8 @@ public final class VersionResolver {
             }
         }
         if (versionUrl == null) {
-            throw new IllegalArgumentException("Unknown Minecraft version: " + versionId);
+            throw new IllegalArgumentException("Unknown Minecraft version: " + versionId
+                    + suggestionSuffix(versionId, manifest));
         }
 
         JsonObject versionJson = JsonParser.parseString(fetch(versionUrl)).getAsJsonObject();
@@ -323,6 +347,54 @@ public final class VersionResolver {
             return "osx";
         }
         return "linux";
+    }
+
+    /**
+     * Suggests close matches for a version id that wasn't found - e.g. {@code rd-122211} (typo)
+     * suggesting {@code rd-132211}, or {@code 1.0} vs {@code 1.0.0} confusion. Only offers
+     * suggestions within a small edit-distance budget (scaled to the input's length) so a
+     * genuinely unrelated id doesn't get padded out with irrelevant noise.
+     */
+    private static String suggestionSuffix(String versionId, JsonObject manifest) {
+        int budget = Math.max(2, versionId.length() / 4);
+        List<String> suggestions = new ArrayList<>();
+        for (JsonElement element : manifest.getAsJsonArray("versions")) {
+            String candidate = element.getAsJsonObject().get("id").getAsString();
+            if (levenshtein(versionId, candidate, budget) <= budget) {
+                suggestions.add(candidate);
+            }
+        }
+        if (suggestions.isEmpty()) {
+            return ".";
+        }
+        suggestions.sort((a, b) -> levenshtein(versionId, a, budget) - levenshtein(versionId, b, budget));
+        return " - did you mean: " + String.join(", ", suggestions.subList(0, Math.min(5, suggestions.size()))) + "?";
+    }
+
+    /** Classic edit-distance DP, capped early once a row exceeds {@code maxDistance} (this is called once per manifest entry, so bailing out early matters). */
+    private static int levenshtein(String a, String b, int maxDistance) {
+        if (Math.abs(a.length() - b.length()) > maxDistance) {
+            return maxDistance + 1;
+        }
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+            int rowMin = current[0];
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
+                rowMin = Math.min(rowMin, current[j]);
+            }
+            if (rowMin > maxDistance) {
+                return maxDistance + 1;
+            }
+            System.arraycopy(current, 0, previous, 0, current.length);
+        }
+        return previous[b.length()];
     }
 
     /** Returns the response body, or {@code null} on a 404 (used for "does this even exist" probes). */
