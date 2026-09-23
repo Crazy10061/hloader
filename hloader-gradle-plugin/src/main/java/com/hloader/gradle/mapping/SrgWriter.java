@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.io.File;
 import java.io.IOException;
@@ -9,12 +9,12 @@ import java.nio.file.Files;
  * processor expects (via {@code -AreobfSrgFile}) to generate refmaps that translate a mixin's
  * readable ("named"/official) references back to the obfuscated names the real game jar uses.
  */
-final class SrgWriter {
+public final class SrgWriter {
 
     private SrgWriter() {
     }
 
-    static void write(MappingSet mappings, File output) throws IOException {
+    public static void write(MappingSet mappings, File output) throws IOException {
         write(mappings, output, false);
     }
 
@@ -30,7 +30,7 @@ final class SrgWriter {
      * file is written separately from - and with reversed columns compared to - the one written
      * via {@link #write(MappingSet, File)}.
      */
-    static void writeReversed(MappingSet mappings, File output) throws IOException {
+    public static void writeReversed(MappingSet mappings, File output) throws IOException {
         write(mappings, output, true);
     }
 

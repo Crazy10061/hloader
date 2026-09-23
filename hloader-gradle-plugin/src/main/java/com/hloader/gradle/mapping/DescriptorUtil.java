@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.util.Map;
 

@@ -50,26 +50,18 @@ public final class HloaderAgent {
     }
 
     /**
-     * {@code premain()} runs in a special, early JVM-internal execution context - even Mixin's own
-     * bootstrap (via Guava's {@code ImmutableSet.of()} inside {@code ClassInfo.<clinit>}) can hit a
-     * {@code ClassCircularityError} there, not just our own code, so this isn't something a given
-     * library can simply avoid triggering. Running the actual bootstrap work on a plain background
-     * thread instead - and just blocking until it finishes - moves it off that special call stack
-     * onto a normal application thread, which isn't subject to the restriction, while still keeping
-     * {@code premain()} effectively synchronous (it doesn't return, and the target's own main()
-     * doesn't start, until bootstrap is fully done).
+     * {@code premain()}'s call stack is special enough that even Mixin's own bootstrap can trigger
+     * a {@code ClassCircularityError} there. Running bootstrap on a plain thread and joining it
+     * avoids that while keeping {@code premain()} effectively synchronous.
      */
     private static void runBootstrapOffPremainThread(Instrumentation instrumentation) {
         Thread thread = new Thread(() -> {
             try {
                 bootstrap(instrumentation);
             } catch (Throwable t) {
-                // An uncaught throwable here would otherwise just kill this thread silently (its
-                // default uncaught-exception handler prints to stderr, easy to miss/lose in a
-                // forked process's output) - and since it can happen anywhere in bootstrap(), it
-                // can leave the transformer never registered while the target still starts up and
-                // runs fine, making a genuine bootstrap failure look identical to "mixins are
-                // simply not applying".
+                // Uncaught here would otherwise kill this thread silently, leaving the transformer
+                // unregistered while the target starts fine anyway - indistinguishable from mixins
+                // just not applying.
                 System.err.println("hloader: bootstrap failed - mixins will NOT be applied:");
                 t.printStackTrace();
             }
@@ -89,12 +81,9 @@ public final class HloaderAgent {
         List<Path> modJars = Hook.findModJars();
         appendToClasspath(instrumentation, modJars);
 
-        // Hook.boot() uses Gson to parse each mod's hloader.mod.json, which triggers Gson's own
-        // internal classloading. Registering the real Mixin transformer *before* that finishes
-        // would route every class Gson loads through Mixin's lazy ClassInfo/Guava bootstrap
-        // reentrantly - from inside Gson's own in-progress ClassLoader.loadClass() call, a proven
-        // ClassCircularityError hazard. Scanning mods first, and only registering the mixin
-        // transformer once that's done, keeps that entirely separate.
+        // Hook.boot() parses hloader.mod.json via Gson, which does its own classloading -
+        // registering the Mixin transformer before that finishes risks routing it reentrantly
+        // through Mixin's lazy ClassInfo/Guava bootstrap (ClassCircularityError).
         Hook.boot(modJars);
 
         RuntimeClassMap classMap = RuntimeClassMap.load(modJars);
@@ -104,11 +93,7 @@ public final class HloaderAgent {
             instrumentation.addTransformer(new MixinClassFileTransformer(transformer, classMap), false);
         }
 
-        // premain() blocks on this thread (see runBootstrapOffPremainThread) and the JVM guarantees
-        // premain() fully returns before the target's main() runs - so this line, flushed, always
-        // precedes anything main() prints. If Mixin's own banner/log output still appears after the
-        // target's early output in a captured log, that's the target's own (buffered/async) logger
-        // flushing late, not bootstrap actually running late.
+        // Flushed so it reliably lands before the target's own (possibly buffered) log output.
         System.out.println("hloader: bootstrap complete, transformer " + (transformer != null ? "registered" : "not registered (no mixin configs found)"));
         System.out.flush();
     }
@@ -169,13 +154,9 @@ public final class HloaderAgent {
             return null;
         }
 
-        // Mixin's own ClassInfo (which needs Guava's ImmutableSet) is lazily initialized the first
-        // time a mixin actually gets applied - and left to happen lazily, that first application
-        // occurs *inside* our ClassFileTransformer.transform() callback, itself invoked reentrantly
-        // from inside ClassLoader.defineClass(). That's a genuinely hazardous place to trigger fresh
-        // classloading and has caused real ClassCircularityErrors (both in Mixin's own bootstrap and
-        // in ours). audit() forces all of that lazy init to happen right now instead, on this normal
-        // thread, before the transformer is ever registered with Instrumentation.
+        // audit() forces Mixin's lazy ClassInfo/Guava init to happen now, on a normal thread,
+        // instead of the first time inside transform() - itself called reentrantly from
+        // ClassLoader.defineClass(), a proven ClassCircularityError hazard.
         try {
             transformer.audit(MixinEnvironment.getDefaultEnvironment());
         } catch (Throwable e) {
@@ -222,24 +203,15 @@ public final class HloaderAgent {
                     }
                 }
                 String dottedName = className.replace('/', '.');
-                // transformClassBytes(name, transformedName, bytes) matches configured @Mixin
-                // targets against transformedName - but Mixin resolves an @Mixin's target class
-                // itself by reading its *actual bytecode* (via HloaderBytecodeProvider, which
-                // knows how to find a named class's obfuscated .class file) and keys its internal
-                // mixinMapping by whatever name is embedded in that real bytecode, i.e. the raw
-                // obfuscated name. So name and transformedName both have to be the same raw,
-                // obfuscated name here - Mixin already bridges named -> obfuscated internally for
-                // its own target matching, and doing it again here would just make them disagree.
+                // Mixin resolves an @Mixin's target class by reading its real (obfuscated)
+                // bytecode via HloaderBytecodeProvider and keys its internal mixinMapping by that
+                // obfuscated name - so name and transformedName both need to be the raw obfuscated
+                // name here, not a deobfuscated one.
                 try {
                     byte[] result;
-                    // Modern Minecraft loads classes from several worker threads at once during
-                    // resource-manager reloads. Sponge Mixin's transformer keeps mutable,
-                    // non-concurrent internal state (ClassInfo cache, etc.) and was never built
-                    // for concurrent invocation - pre-1.6 versions never triggered this since
-                    // they load classes on a single thread. Without this lock, concurrent calls
-                    // here corrupted that state badly enough to crash the JVM natively
-                    // (ACCESS_VIOLATION in jvm.dll, no catchable Java exception) rather than
-                    // just throwing.
+                    // Concurrent calls corrupt Mixin's non-thread-safe internal state badly enough
+                    // to crash the JVM natively rather than throw - modern Minecraft transforms
+                    // classes from multiple threads during resource reloads.
                     synchronized (transformer) {
                         result = transformer.transformClassBytes(dottedName, dottedName, classfileBuffer);
                     }
@@ -255,13 +227,8 @@ public final class HloaderAgent {
             }
 
             /**
-             * {@code mixin.debug.export} (see {@link #initMixin}) dumps the class Mixin actually
-             * applied to, under its raw obfuscated name - useful as ground truth, but every class,
-             * method and field reference inside is still obfuscated, which makes it close to
-             * unreadable. This writes a second copy, remapped through the same obf<->named data
-             * {@link RuntimeClassMap} loaded from the mod's bundled {@code hloader/mappings.srg},
-             * next to Mixin's own export directory - only for classes a mixin actually changed, to
-             * avoid dumping hundreds of untouched classes on every run.
+             * {@code mixin.debug.export}'s own dump uses raw obfuscated names throughout. This
+             * writes a second, deobfuscated copy next to it (only for classes actually changed).
              */
             private void exportNamedCopy(String obfDottedName, byte[] transformedBytes) {
                 try {

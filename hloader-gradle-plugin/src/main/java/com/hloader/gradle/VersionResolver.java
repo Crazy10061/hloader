@@ -15,9 +15,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /** Talks to Mojang's public version manifest to resolve version metadata for either game side. */
-final class VersionResolver {
+public final class VersionResolver {
 
     private static final String MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
@@ -62,7 +63,7 @@ final class VersionResolver {
     }
 
     /** {@code side} is {@code "client"} or {@code "server"}. */
-    static MinecraftVersionInfo fetchVersionInfo(String minecraftVersion, String side, boolean patchLegacyLaunchWrapper) {
+    public static MinecraftVersionInfo fetchVersionInfo(String minecraftVersion, String side, boolean patchLegacyLaunchWrapper) {
         JsonObject manifest = JsonParser.parseString(fetch(MANIFEST_URL)).getAsJsonObject();
         String versionId = "latest".equals(minecraftVersion)
                 ? manifest.getAsJsonObject("latest").get("release").getAsString()
@@ -184,7 +185,9 @@ final class VersionResolver {
         if (downloads.has("artifact")) {
             JsonObject artifact = downloads.getAsJsonObject("artifact");
             boolean isNative = library.get("name").getAsString().contains(":natives-");
-            result.add(new LibraryInfo(artifact.get("url").getAsString(), artifact.get("path").getAsString(), isNative));
+            LibraryInfo javaJarOverride = appleSiliconLwjglJavaJarOverride(name);
+            result.add(javaJarOverride != null ? javaJarOverride
+                    : new LibraryInfo(artifact.get("url").getAsString(), artifact.get("path").getAsString(), isNative));
         }
 
         if (library.has("natives") && downloads.has("classifiers")) {
@@ -210,6 +213,29 @@ final class VersionResolver {
         }
 
         return result;
+    }
+
+    /**
+     * The Apple Silicon native override (see {@link #APPLE_SILICON_NATIVE_OVERRIDES}) substitutes
+     * a rebuild based on LWJGL 2.9.4-nightly's native ABI. Versions that declare {@code lwjgl:2.9.0}
+     * (e.g. {@code 1.0}, {@code rd-132211}) then pair 2.9.0-vintage Java classes against that much
+     * newer native library - an ABI mismatch that crashes natively inside a JNI callback
+     * ({@code jni_CallVoidMethod}) the moment LWJGL creates its window, rather than throwing a
+     * catchable Java exception. {@code 1.7.10} declares {@code lwjgl:2.9.1} and never hits this.
+     * Bumping the Java-side jar to the same 2.9.1 whenever the native override is in play closes
+     * that gap without touching versions that already avoid it.
+     */
+    private static LibraryInfo appleSiliconLwjglJavaJarOverride(String libraryName) {
+        if (!isAppleSiliconMac()) {
+            return null;
+        }
+        if (libraryName.startsWith("org.lwjgl.lwjgl:lwjgl:") && !libraryName.equals("org.lwjgl.lwjgl:lwjgl:2.9.1")) {
+            return mavenLibrary(MAVEN_CENTRAL, "org/lwjgl/lwjgl/lwjgl", "2.9.1", "lwjgl");
+        }
+        if (libraryName.startsWith("org.lwjgl.lwjgl:lwjgl_util:") && !libraryName.equals("org.lwjgl.lwjgl:lwjgl_util:2.9.1")) {
+            return mavenLibrary(MAVEN_CENTRAL, "org/lwjgl/lwjgl/lwjgl_util", "2.9.1", "lwjgl_util");
+        }
+        return null;
     }
 
     private static String appleSiliconOverrideUrl(String libraryName) {
@@ -264,12 +290,21 @@ final class VersionResolver {
         boolean allowed = false;
         for (JsonElement element : library.getAsJsonArray("rules")) {
             JsonObject rule = element.getAsJsonObject();
-            boolean matchesOs = true;
+            boolean matches = true;
             if (rule.has("os")) {
-                String ruleOs = rule.getAsJsonObject("os").get("name").getAsString();
-                matchesOs = ruleOs.equals(currentOs);
+                JsonObject os = rule.getAsJsonObject("os");
+                if (os.has("name") && !os.get("name").getAsString().equals(currentOs)) {
+                    matches = false;
+                }
+                // Some old versions (e.g. rd-132211) restrict a library to a specific OS *version*
+                // too (e.g. only osx 10.5.x) - without checking this, that library incorrectly gets
+                // included on every OS version, colliding with the one meant for modern systems.
+                if (matches && os.has("version")
+                        && !Pattern.compile(os.get("version").getAsString()).matcher(System.getProperty("os.version", "")).find()) {
+                    matches = false;
+                }
             }
-            if (matchesOs) {
+            if (matches) {
                 allowed = "allow".equals(rule.get("action").getAsString());
             }
         }
@@ -288,7 +323,7 @@ final class VersionResolver {
     }
 
     /** Returns the response body, or {@code null} on a 404 (used for "does this even exist" probes). */
-    static byte[] fetchBytesOrNull(String url) {
+    public static byte[] fetchBytesOrNull(String url) {
         try {
             HttpClient client = HttpClient.newHttpClient();
             HttpRequest request = HttpRequest.newBuilder(URI.create(url)).GET().build();
@@ -305,7 +340,7 @@ final class VersionResolver {
         }
     }
 
-    static String fetch(String url) {
+    public static String fetch(String url) {
         try {
             HttpClient client = HttpClient.newHttpClient();
             HttpRequest request = HttpRequest.newBuilder(URI.create(url)).GET().build();

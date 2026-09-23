@@ -11,18 +11,10 @@ import java.util.jar.JarFile;
 import org.objectweb.asm.commons.Remapper;
 
 /**
- * {@code IMixinTransformer.transformClassBytes(name, transformedName, bytes)} matches configured
- * {@code @Mixin} targets - declared in named/deobfuscated form, e.g.
- * {@code net.minecraft.client.Minecraft} - against {@code transformedName} only; {@code name} is
- * otherwise unused. Environments like FML/LaunchWrapper always run a separate deobfuscating
- * transformer in front of Mixin, so by the time Mixin sees a class, its name is already
- * deobfuscated. hloader has no such transformer - the class is still raw-obfuscated at runtime
- * (e.g. {@code bao}) - so without this, {@code transformedName} would stay obfuscated and never
- * match any configured target at all. The hloader Gradle plugin bundles the same obf-to-named
- * mapping data it generates at compile time into each mod jar (see {@code HloaderPlugin}'s
- * {@code hloader/mappings.srg} jar entry); this reads that back to bridge the gap, and also to
- * produce human-readable copies of mixin-transformed classes for debugging (see
- * {@link #toDeobfuscatingRemapper()}).
+ * Reads back the obf<->named mapping data the Gradle plugin bundles into each mod jar as
+ * {@code hloader/mappings.srg}, and bridges obf/named class, method and field names at runtime -
+ * used both by {@code HloaderBytecodeProvider} (to find a named class's obfuscated bytecode) and
+ * to produce human-readable copies of mixin-transformed classes for debugging.
  */
 public final class RuntimeClassMap {
 
@@ -52,19 +44,13 @@ public final class RuntimeClassMap {
         return obfToNamedDotted.getOrDefault(dottedName, dottedName);
     }
 
-    /** The inverse of {@link #toTransformedName} - needed to find a named class's actual bytecode
-     * on the classpath, since that's still filed under its obfuscated name. */
+    /** The inverse of {@link #toTransformedName}. */
     public String toObfuscatedName(String dottedName) {
         return namedToObfDotted.getOrDefault(dottedName, dottedName);
     }
 
-    /**
-     * An ASM {@link Remapper} that renames obfuscated classes/methods/fields to their named
-     * equivalents. Only used to produce a separate, human-readable copy of a class for
-     * {@code mixin.debug.export} - the bytecode actually handed back to the JVM always stays in
-     * its original obfuscated form, since that's what the rest of the (unmapped) runtime jar
-     * still expects.
-     */
+    /** Renames obfuscated classes/methods/fields to named equivalents - for debug export only,
+     * never applied to bytecode actually handed back to the JVM. */
     public Remapper toDeobfuscatingRemapper() {
         return new Remapper() {
             @Override

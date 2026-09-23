@@ -14,18 +14,10 @@ import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.service.IClassBytecodeProvider;
 
 /**
- * Reads raw (un-transformed) bytecode for a class straight off the JVM's actual classpath
- * entries, rather than through {@code ClassLoader.getSystemResourceAsStream}.
- *
- * <p>That more obvious approach opens jar entries via
- * {@code sun.net.www.protocol.jar.URLJarFile}, whose backing {@code java.util.zip.ZipFile}
- * instances are short-lived and reclaimed by the JVM's Common-Cleaner thread. Mixin can call
- * this method from the main thread - while holding its own {@code MixinProcessor} lock - at the
- * same moment Common-Cleaner is finalizing an earlier {@code URLJarFile} for the same underlying
- * zip; the two threads then deadlock on {@code ZipFile}'s internal shared-source cache lock, a
- * JVM-level hazard rather than a bug in Mixin or ASM. Opening each jar exactly once and holding
- * it open for the life of the process - instead of letting {@code URLJarFile} hand out
- * short-lived, GC-reclaimed wrappers - sidesteps the Cleaner race entirely.</p>
+ * Reads raw (un-transformed) class bytecode from the classpath, keeping each opened {@link JarFile}
+ * for the process lifetime rather than going through {@code ClassLoader.getSystemResourceAsStream}
+ * ({@code URLJarFile}'s short-lived {@code ZipFile}s can deadlock with the Common-Cleaner thread
+ * when Mixin calls this while holding its own processor lock).
  */
 final class HloaderBytecodeProvider implements IClassBytecodeProvider {
 
@@ -37,7 +29,6 @@ final class HloaderBytecodeProvider implements IClassBytecodeProvider {
     private HloaderBytecodeProvider() {
     }
 
-    /** Set once, from {@code HloaderAgent}, as soon as the runtime obf<->named class map loads. */
     void setClassMap(RuntimeClassMap classMap) {
         this.classMap = classMap;
     }
@@ -54,10 +45,8 @@ final class HloaderBytecodeProvider implements IClassBytecodeProvider {
 
     @Override
     public ClassNode getClassNode(String name, boolean runTransformers, int readerFlags) throws ClassNotFoundException, IOException {
-        // Mixin asks for this by whatever name it currently has in hand - sometimes the class's
-        // real (obfuscated) name, sometimes a @Mixin target's declared named/deobfuscated name
-        // (e.g. resolving the target class itself, before any per-member remapping happens) - but
-        // the classpath only ever has the obfuscated one on disk.
+        // Mixin sometimes asks by the class's real (obfuscated) name, sometimes by a @Mixin
+        // target's declared named/deobfuscated one - the classpath only has the obfuscated one.
         String obfName = classMap.toObfuscatedName(name.replace('/', '.')).replace('.', '/');
         String resource = obfName + ".class";
         try (InputStream in = openClasspathResource(resource)) {
@@ -87,10 +76,8 @@ final class HloaderBytecodeProvider implements IClassBytecodeProvider {
                 return in;
             }
         }
-        // Not a classpath jar entry - most likely a JDK platform class (e.g. java.lang.System),
-        // which lives in the runtime's module system rather than any -cp jar. Those are served
-        // through jdk.internal.jrtfs, not sun.net.www.protocol.jar, so they don't share the
-        // ZipFile/Cleaner deadlock this class otherwise avoids; safe to fall back here.
+        // Not a classpath jar entry - likely a JDK platform class served via jrtfs, which doesn't
+        // share the ZipFile/Cleaner deadlock this class otherwise avoids.
         return ClassLoader.getSystemResourceAsStream(resource);
     }
 

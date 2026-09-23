@@ -1,16 +1,16 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 /**
  * Parses SRG-format mappings directly (Forge/MCP's {@code joined.srg}) into a {@link MappingSet}.
  * Unlike Mojang's Proguard mappings, SRG already lists both sides' JVM descriptors verbatim, so no
  * source-type-to-descriptor conversion is needed.
  */
-final class SrgParser {
+public final class SrgParser {
 
     private SrgParser() {
     }
 
-    static MappingSet parse(String text) {
+    public static MappingSet parse(String text) {
         MappingSet set = new MappingSet();
 
         for (String line : text.split("\n")) {

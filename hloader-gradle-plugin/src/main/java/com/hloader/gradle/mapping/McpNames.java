@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -13,12 +13,12 @@ import java.util.zip.ZipInputStream;
  * {@code isSneaking}) on top of a {@link MappingSet} that currently only has Forge/MCP's raw SRG
  * intermediate names ({@code field_XXXXX_x}/{@code func_XXXXX_x}) as its "official" side.
  */
-final class McpNames {
+public final class McpNames {
 
     private McpNames() {
     }
 
-    static void applyFromZip(MappingSet mappings, byte[] zipBytes) throws IOException {
+    public static void applyFromZip(MappingSet mappings, byte[] zipBytes) throws IOException {
         Map<String, String> methodNames = new HashMap<>();
         Map<String, String> fieldNames = new HashMap<>();
 

@@ -34,7 +34,7 @@ public final class Main {
                 Path patched = Files.createTempFile("hloader-", ".jar");
                 patched.toFile().deleteOnExit();
                 JarPatcher.patch(input, patched);
-                int exitCode = launch(patched, java.util.Arrays.copyOfRange(args, 2, args.length));
+                int exitCode = launch(patched, Arrays.copyOfRange(args, 2, args.length));
                 System.exit(exitCode);
             }
         }

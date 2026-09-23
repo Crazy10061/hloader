@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.io.File;
 import java.io.IOException;
@@ -19,7 +19,7 @@ import org.objectweb.asm.Opcodes;
  * (slash-separated) form and obfuscated-side method/field descriptors derived - what both the
  * compile-time deobfuscating remapper and the SRG writer need.
  */
-final class MappingSet {
+public final class MappingSet {
 
     record MethodEntry(String obfOwner, String obfName, String obfDescriptor, String officialName, String officialDescriptor) {
     }
@@ -27,12 +27,12 @@ final class MappingSet {
     record FieldEntry(String obfOwner, String obfName, String officialName) {
     }
 
-    final Map<String, String> obfToOfficialClass = new HashMap<>();
-    final Map<String, String> officialToObfClass = new HashMap<>();
-    final Map<String, MethodEntry> methodsByObfKey = new HashMap<>();
-    final Map<String, FieldEntry> fieldsByObfKey = new HashMap<>();
+    public final Map<String, String> obfToOfficialClass = new HashMap<>();
+    public final Map<String, String> officialToObfClass = new HashMap<>();
+    public final Map<String, MethodEntry> methodsByObfKey = new HashMap<>();
+    public final Map<String, FieldEntry> fieldsByObfKey = new HashMap<>();
 
-    static MappingSet from(ProguardMappings mappings) {
+    public static MappingSet from(ProguardMappings mappings) {
         MappingSet set = new MappingSet();
 
         mappings.officialToObfClass().forEach((official, obf) -> {
@@ -64,7 +64,7 @@ final class MappingSet {
      * possibly reference, even unchanged ones - so this reads every class in the actual game jar
      * and fills in identity entries (obf name == named name) for anything not already mapped.
      */
-    void completeFromJar(File jar) throws IOException {
+    public void completeFromJar(File jar) throws IOException {
         try (ZipFile zip = new ZipFile(jar)) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {

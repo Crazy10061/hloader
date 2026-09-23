@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  *     45:52:void tick() -> h
  * </pre>
  */
-final class ProguardMappings {
+public final class ProguardMappings {
 
     private static final Pattern CLASS_LINE = Pattern.compile("^(\\S+) -> (\\S+):$");
     private static final Pattern FIELD_LINE = Pattern.compile("^ {4}(\\S+) (\\S+) -> (\\S+)$");
@@ -52,11 +52,11 @@ final class ProguardMappings {
         return officialToObfField;
     }
 
-    static ProguardMappings empty() {
+    public static ProguardMappings empty() {
         return new ProguardMappings();
     }
 
-    static ProguardMappings parse(String text) {
+    public static ProguardMappings parse(String text) {
         ProguardMappings mappings = new ProguardMappings();
         String currentOfficialClass = null;
 

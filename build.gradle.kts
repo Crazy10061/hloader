@@ -27,7 +27,9 @@ dependencies {
     implementation("org.ow2.asm:asm-analysis:$asmVersion")
     implementation("org.ow2.asm:asm-util:$asmVersion")
     implementation("org.spongepowered:mixin:0.8.7")
-    implementation("com.google.guava:guava:33.3.1-jre")
+    // Newer versions trip an ArrayIndexOutOfBoundsException in Shadow's ASM-based relocator on a
+    // few Guava classes with nested generic signatures (e.g. Maps$FilteredEntrySortedMap$SortedKeySet).
+    implementation("com.google.guava:guava:32.1.3-jre")
     implementation("com.google.code.gson:gson:2.11.0")
 }
 

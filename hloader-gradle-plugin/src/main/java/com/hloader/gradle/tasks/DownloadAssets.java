@@ -1,5 +1,7 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
+import com.hloader.gradle.MinecraftVersionInfo;
+import com.hloader.gradle.VersionResolver;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;

@@ -1,5 +1,15 @@
 package com.hloader.gradle;
 
+import com.hloader.gradle.tasks.DownloadAssets;
+import com.hloader.gradle.tasks.DownloadLibraries;
+import com.hloader.gradle.tasks.DownloadMinecraftJar;
+import com.hloader.gradle.tasks.ExtractGameJar;
+import com.hloader.gradle.tasks.ExtractLibraries;
+import com.hloader.gradle.tasks.GenerateMappings;
+import com.hloader.gradle.tasks.MergeGameJars;
+import com.hloader.gradle.tasks.RemapGameJar;
+import com.hloader.gradle.tasks.RunDevClient;
+import com.hloader.gradle.tasks.RunDevServer;
 import java.util.List;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
@@ -40,12 +50,8 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getSide().set("server");
                 });
 
-        // Derived from the already-version-qualified download path (its parent directory name is
-        // the resolved version id, e.g. "1.7.10") rather than resolving version info again - no
-        // extra network call. Everything below that's a single per-version artifact gets this
-        // version segment in its path instead of a fixed name, so switching minecraftVersion (and
-        // then a Gradle reload/sync, or even a plain build) can never leave a stale file behind at
-        // a path a *different* version would also use.
+        // Read off the already-version-qualified download path instead of re-resolving version
+        // info, so every per-version output below stays keyed to the right version on switch.
         var versionSegment = project.getLayout().file(downloadServerJarTask.map(DownloadMinecraftJar::getOutputJar))
                 .map(f -> f.getAsFile().getParentFile().getName());
 
@@ -70,11 +76,8 @@ public class HloaderPlugin implements Plugin<Project> {
                     task.getLibrariesDir().set(project.getLayout().getBuildDirectory().dir(versionSegment.map(v -> "hloader/" + v + "/libraries")));
                 });
 
-        // Compiling against the server jar alone means client-only classes/members (e.g.
-        // net.minecraft.client.Minecraft) simply aren't there to write @Mixin/@Shadow references
-        // against. Forge/MCP's own "joined" mapping (joined.srg) already assumes a single merged
-        // view of the game exists for exactly this reason - merging the two jars here for compiling
-        // against matches that, and lets one mod's mixins target either side. See JarMerger.
+        // Client-only classes (e.g. Minecraft.class) aren't on the server jar alone; merge both so
+        // mixins can target either side. See JarMerger.
         TaskProvider<MergeGameJars> mergeGameJarsTask = project.getTasks().register(
                 "mergeGameJars", MergeGameJars.class, task -> {
                     task.dependsOn(extractGameJarTask, downloadClientJarTask);
@@ -114,11 +117,8 @@ public class HloaderPlugin implements Plugin<Project> {
                         .builtBy(extractLibrariesTask)
                         .matching(filter -> filter.include("*.jar")));
 
-        // A bare filename here would route through Filer.createResource(), which throws on the
-        // second of Mixin AP's multiple annotation-processing rounds ("Attempt to reopen a file").
-        // An absolute path takes Mixin's plain-file-write branch instead, which tolerates that fine
-        // - matching what the official MixinGradle plugin does. The file then gets added to the
-        // jar explicitly below.
+        // A bare filename routes through Filer.createResource(), which throws on Mixin AP's second
+        // annotation-processing round ("Attempt to reopen a file"); an absolute path avoids that.
         var refmapFile = project.getLayout().getBuildDirectory().file("hloader/mixin.refmap.json");
 
         project.getDependencies().add("annotationProcessor", "org.spongepowered:mixin:0.8.7:processor");
@@ -133,13 +133,7 @@ public class HloaderPlugin implements Plugin<Project> {
         });
         project.getTasks().named(JavaPlugin.JAR_TASK_NAME, Jar.class, jar -> {
             jar.from(refmapFile);
-            // IMixinTransformer.transformClassBytes(name, transformedName, bytes) matches configured
-            // @Mixin targets (declared in named/deobfuscated form, e.g. net.minecraft.client.Minecraft)
-            // against transformedName only - name is otherwise unused. HloaderAgent runs with no
-            // separate deobfuscating transformer in front of Mixin (unlike FML/LaunchWrapper, where
-            // one always runs first), so at runtime the loaded class is still raw-obfuscated and
-            // there's nothing to compute transformedName from unless this mapping travels with the
-            // mod - see com.hloader.mixin.RuntimeClassMapper, which reads it back.
+            // Bundled so HloaderAgent's RuntimeClassMap can bridge obf<->named names at runtime.
             jar.into("hloader", spec -> spec.from(generateMappingsTask.flatMap(GenerateMappings::getSrgFile)));
         });
 

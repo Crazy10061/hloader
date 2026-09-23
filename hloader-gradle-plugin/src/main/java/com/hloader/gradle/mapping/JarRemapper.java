@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.io.File;
 import java.io.IOException;
@@ -14,12 +14,12 @@ import org.objectweb.asm.commons.ClassRemapper;
 import org.objectweb.asm.commons.Remapper;
 
 /** Rewrites every class in a jar from obfuscated names to Mojang's official (readable) names. */
-final class JarRemapper {
+public final class JarRemapper {
 
     private JarRemapper() {
     }
 
-    static void remap(File input, File output, MappingSet mappings) throws IOException {
+    public static void remap(File input, File output, MappingSet mappings) throws IOException {
         Remapper remapper = new DeobfuscatingRemapper(mappings);
         Files.createDirectories(output.toPath().getParent());
 

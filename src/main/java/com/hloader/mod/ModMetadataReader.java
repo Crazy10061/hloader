@@ -29,12 +29,9 @@ final class ModMetadataReader {
                 return null;
             }
             JsonObject json;
-            // Deliberately not Gson.fromJson(reader, ModMetadata.class): binding straight to a
-            // record triggers Gson's reflective RecordAdapter, whose static initializer calls
-            // Byte.valueOf(). This runs inside the agent's premain(), before the JVM has finished
-            // its own bootstrap - at that exact moment, that specific reflective path causes a
-            // ClassCircularityError on java.lang.Byte$ByteCache (a JVM-timing hazard, not a bug in
-            // Gson or our code). Parsing through the plain JsonObject API sidesteps it entirely.
+            // Not Gson.fromJson(reader, ModMetadata.class): binding to a record triggers Gson's
+            // reflective RecordAdapter, which causes a ClassCircularityError on
+            // java.lang.Byte$ByteCache this early in premain(). Plain JsonObject parsing avoids it.
             try (var reader = new InputStreamReader(jarFile.getInputStream(entry), StandardCharsets.UTF_8)) {
                 json = JsonParser.parseReader(reader).getAsJsonObject();
             }

@@ -11,7 +11,7 @@ import java.util.List;
  *     compiling against but not something that's actually runnable as a server. Always true for
  *     {@code side="client"} fetches.
  */
-record MinecraftVersionInfo(
+public record MinecraftVersionInfo(
         String versionId,
         String mainClass,
         String downloadUrl,

@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;

@@ -42,16 +42,11 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
 
     @Override
     public Phase getInitialPhase() {
-        // MixinBootstrap.start() checks this: if it's already Phase.DEFAULT, Mixin assumes its own
-        // subsystem was bootstrapped *after* the game's pre-init/mod-scanning phase already ran
-        // (normal for FML/LaunchWrapper, which transition PREINIT -> DEFAULT themselves once mod
-        // loading finishes) and logs "Initialising mixin subsystem after game pre-init phase! Some
-        // mixins may be skipped." - which is exactly what happened here, since this used to return
-        // Phase.DEFAULT even though hloader bootstraps and registers every config before the game's
-        // main() ever runs, i.e. still genuinely in pre-init.
+        // MixinBootstrap.start() warns and skips mixins if this is already Phase.DEFAULT, assuming
+        // pre-init already ran elsewhere (as it does for FML/LaunchWrapper). hloader registers
+        // every config before main() runs, so it's genuinely still pre-init.
         return Phase.PREINIT;
     }
-
 
     @Override
     public void offer(IMixinInternal internal) {
@@ -118,13 +113,8 @@ public final class HloaderMixinService extends MixinServiceAbstract implements I
         return ClassLoader.getSystemResourceAsStream(name);
     }
 
-    /**
-     * {@code MixinServiceAbstract}'s own default ({@code LoggerAdapterDefault}) discards
-     * everything - the "Logger Adapter Type: Default Logger (No Logging)" line in Mixin's startup
-     * banner is this. That silently swallows Mixin's own warnings when e.g. an {@code @Inject}
-     * target can't be resolved at runtime, making a real application failure look identical to a
-     * mixin quietly doing nothing.
-     */
+    // MixinServiceAbstract's default logger discards everything, silently swallowing warnings
+    // (e.g. an unresolvable @Inject target) that would otherwise look identical to a no-op mixin.
     @Override
     protected ILogger createLogger(String name) {
         return new LoggerAdapterConsole(name);

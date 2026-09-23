@@ -1,5 +1,6 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
+import com.hloader.gradle.mapping.JarMerger;
 import java.io.IOException;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.file.RegularFileProperty;

@@ -1,5 +1,8 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
+import com.hloader.gradle.mapping.JarRemapper;
+import com.hloader.gradle.mapping.MappingSet;
+import com.hloader.gradle.mapping.SrgParser;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;

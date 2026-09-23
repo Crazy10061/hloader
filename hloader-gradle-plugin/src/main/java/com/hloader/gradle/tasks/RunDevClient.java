@@ -1,5 +1,7 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
+import com.hloader.gradle.LibraryInfo;
+import com.hloader.gradle.MinecraftVersionInfo;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -7,6 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import javax.inject.Inject;
 import org.gradle.api.DefaultTask;
@@ -56,15 +59,15 @@ public abstract class RunDevClient extends DefaultTask {
 
     @TaskAction
     public void run() throws IOException {
+        MinecraftVersionInfo info = getVersionInfo().get();
+
         Path runDir = getRunDir().get().getAsFile().toPath();
         Path modsDir = runDir.resolve("mods");
         Files.createDirectories(modsDir);
         Path modJar = getModJar().get().getAsFile().toPath();
         Files.copy(modJar, modsDir.resolve(modJar.getFileName()), StandardCopyOption.REPLACE_EXISTING);
 
-        MinecraftVersionInfo info = getVersionInfo().get();
         File librariesDir = getLibrariesDir().get().getAsFile();
-
         List<Object> classpath = new ArrayList<>();
         classpath.add(getClientJar().get().getAsFile());
         for (LibraryInfo library : info.libraries()) {
@@ -80,21 +83,18 @@ public abstract class RunDevClient extends DefaultTask {
             spec.jvmArgs("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
             spec.jvmArgs("-Djava.library.path=" + getNativesDir().get().getAsFile().getPath());
             spec.jvmArgs("-Dhloader.side=CLIENT");
-            if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac")) {
-                // macOS's Cocoa windowing only allows UI/video-device calls from the process's
-                // actual first thread - GLFW/SDL (used by modern Minecraft's RenderSystem) fails
-                // with "Unable to initialize SDL: No available video device" without this, even
-                // with a real display attached, since a JVM's main thread isn't its first OS
-                // thread unless told to be.
+            if (usesGlfw(info) && isMac()) {
+                // Modern Minecraft's GLFW/SDL windowing needs the JVM's actual first OS thread on
+                // macOS, or it fails with "Unable to initialize SDL: No available video device"
+                // even with a real display attached. Older, AWT/LWJGL2-based versions manage the
+                // main thread themselves and can hang if this is forced on them, so it's only
+                // added when the version's own libraries pull in LWJGL3's GLFW module.
                 spec.jvmArgs("-XstartOnFirstThread");
             }
 
             Package pkg = getClass().getPackage();
-            String name = pkg.getName();
-            String version = pkg.getImplementationVersion();
-
-            spec.jvmArgs("-Dminecraft.launcher.brand=" + name);
-            spec.jvmArgs("-Dminecraft.launcher.version=" + version);
+            spec.jvmArgs("-Dminecraft.launcher.brand=" + pkg.getName());
+            spec.jvmArgs("-Dminecraft.launcher.version=" + pkg.getImplementationVersion());
 
             spec.getMainClass().set(info.mainClass());
             spec.args(
@@ -114,5 +114,13 @@ public abstract class RunDevClient extends DefaultTask {
             spec.setWorkingDir(runDir.toFile());
             spec.setIgnoreExitValue(true);
         });
+    }
+
+    private static boolean usesGlfw(MinecraftVersionInfo info) {
+        return info.libraries().stream().anyMatch(lib -> lib.path().contains("lwjgl-glfw"));
+    }
+
+    private static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
     }
 }

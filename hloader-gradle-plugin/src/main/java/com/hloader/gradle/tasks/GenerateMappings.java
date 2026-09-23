@@ -1,5 +1,12 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
+import com.hloader.gradle.MinecraftVersionInfo;
+import com.hloader.gradle.VersionResolver;
+import com.hloader.gradle.mapping.MappingSet;
+import com.hloader.gradle.mapping.McpNames;
+import com.hloader.gradle.mapping.ProguardMappings;
+import com.hloader.gradle.mapping.SrgParser;
+import com.hloader.gradle.mapping.SrgWriter;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -20,14 +27,12 @@ import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.TaskAction;
 
 /**
- * Downloads mapping data for a version and turns it into both an in-memory {@link MappingSet} (for
- * {@link RemapGameJar}) and an SRG file (for Mixin's annotation processor).
+ * Downloads mapping data for a version and writes it as an SRG file for {@link RemapGameJar} and
+ * Mixin's annotation processor.
  *
- * <p>Mojang's own official (Proguard-format) mappings are used when available (roughly 1.14.4+) -
- * already fully human-readable. Older versions never got official mappings at all, so those fall
- * back to Forge/MCP's published {@code joined.srg}, which only gives SRG intermediate names
- * ({@code field_NNNNN_x}/{@code func_NNNNN_x}); {@code mcp_stable}'s separately-versioned CSV data
- * is then layered on top of that to turn those into real human names. Versions with neither get an
+ * <p>Mojang's own official (Proguard-format) mappings are used when available (roughly 1.14.4+).
+ * Older versions fall back to Forge/MCP's {@code joined.srg} (SRG intermediate names), with
+ * {@code mcp_stable}'s CSV data layered on top for real human names. Versions with neither get an
  * empty (no-op) mapping.</p>
  */
 public abstract class GenerateMappings extends DefaultTask {
@@ -59,11 +64,6 @@ public abstract class GenerateMappings extends DefaultTask {
     @OutputFile
     public abstract RegularFileProperty getReobfSrgFile();
 
-    @Internal
-    public MappingSet getMappingSet() {
-        return mappingSet;
-    }
-
     @TaskAction
     public void generate() throws IOException {
         MinecraftVersionInfo info = getVersionInfo().get();
@@ -74,9 +74,8 @@ public abstract class GenerateMappings extends DefaultTask {
             getLogger().lifecycle("hloader: generated mappings for " + info.versionId() + " from Mojang's official mappings ("
                     + mappingSet.obfToOfficialClass.size() + " classes)");
 
-            // The game jar being mapped here is a client+server *merge* (see MergeGameJars), but
-            // Mojang's official mappings are published separately per side - fold the client side's
-            // mapping in too so client-only classes/members get real names as well.
+            // The game jar is a client+server merge (see MergeGameJars) but mappings are published
+            // per side - fold the client mapping in too for client-only classes/members.
             MinecraftVersionInfo clientInfo = getClientVersionInfo().getOrNull();
             if (clientInfo != null && clientInfo.mappingsUrl() != null) {
                 String clientMappingText = VersionResolver.fetch(clientInfo.mappingsUrl());
@@ -94,12 +93,8 @@ public abstract class GenerateMappings extends DefaultTask {
                         + "joined.srg instead (" + mappingSet.obfToOfficialClass.size() + " classes)");
                 applyMcpNamesIfAvailable(info.versionId());
             } else if (isAlreadyUnobfuscated(getGameJar().get().getAsFile())) {
-                // Mojang stopped obfuscating the game jar itself at some point (client/server
-                // downloads for the newer year.month version scheme, e.g. 26.x, ship real class
-                // names directly - no "client_mappings"/"server_mappings" entry ever gets
-                // published for them because there's nothing left to map). An empty MappingSet is
-                // still the right thing to use here (there's no renaming to do), this just avoids
-                // reporting that as if mapping data was unavailable/missing.
+                // Newer (year.month scheme, e.g. 26.x) game jars ship real class names directly -
+                // no mapping is published because there's nothing left to map.
                 getLogger().lifecycle("hloader: " + info.versionId() + " ships an already-deobfuscated game jar - no mapping needed");
                 mappingSet = MappingSet.from(ProguardMappings.empty());
             } else {
@@ -153,14 +148,35 @@ public abstract class GenerateMappings extends DefaultTask {
         return best < 0 ? null : best + "-" + versionId;
     }
 
-    /** A jar that already has real, dotted-package class names (rather than short obfuscated
-     * ones) needs no deobfuscation at all - checking for one well-known always-present class is
-     * enough to tell the two cases apart. */
+    /**
+     * A jar that already has real, dotted-package class names (rather than short obfuscated ones)
+     * needs no deobfuscation at all. Checking for one specific well-known class isn't reliable on
+     * its own: even genuinely-obfuscated jars from the applet era keep a couple of outer classes
+     * (e.g. {@code net.minecraft.client.Minecraft}, {@code MinecraftApplet}) unobfuscated so
+     * embedding code has a stable class to instantiate, while every other class - including all
+     * the actual game logic - is still a short, default-package obfuscated name. Instead, this
+     * checks what fraction of ALL classes are in the default package (no {@code /} in their
+     * name) - legacy obfuscation dumps the vast majority of classes there, so a jar is only
+     * genuinely unobfuscated if that fraction is negligible.
+     */
     private static boolean isAlreadyUnobfuscated(File gameJar) throws IOException {
+        int total = 0;
+        int defaultPackage = 0;
         try (ZipFile zip = new ZipFile(gameJar)) {
-            return zip.getEntry("net/minecraft/client/Minecraft.class") != null
-                    || zip.getEntry("net/minecraft/server/MinecraftServer.class") != null;
+            var entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (entry.isDirectory() || !name.endsWith(".class")) {
+                    continue;
+                }
+                total++;
+                if (!name.contains("/")) {
+                    defaultPackage++;
+                }
+            }
         }
+        return total > 0 && defaultPackage * 10 < total;
     }
 
     private static MappingSet tryForgeMcpMappings(String versionId) throws IOException {

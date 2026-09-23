@@ -23,11 +23,20 @@ import java.util.concurrent.ConcurrentHashMap;
  * fork of LaunchWrapper, not just the exact vanilla 1.5 build), we reflectively call its public
  * {@code addClassLoaderExclusion(String)} for the package prefixes hloader itself needs resolved
  * through the parent.</p>
+ *
+ * <p>{@code org.lwjgl.} needs the same treatment for an unrelated reason: without it,
+ * LaunchClassLoader defines its own separate copy of LWJGL's classes, distinct from whichever
+ * classloader's copy the native library's JNI bindings actually got resolved against when
+ * {@code System.loadLibrary} first ran. A native callback into "the wrong" copy of a class is
+ * exactly the kind of classloader-identity mismatch that crashes the JVM natively (segfault
+ * inside {@code jni_CallVoidMethod}) rather than throwing a catchable Java exception - this is
+ * why pre-1.6 (LaunchWrapper-based) versions could crash creating their window even when later,
+ * non-LaunchWrapper versions using the exact same LWJGL native library work fine.</p>
  */
 public final class LegacyTweakerClassLoaderBridge implements ClassFileTransformer {
 
     private static final String[] DELEGATE_TO_PARENT = {
-            "org.spongepowered.", "com.hloader.",
+            "org.spongepowered.", "com.hloader.", "org.lwjgl.",
     };
 
     private final Set<ClassLoader> configured = ConcurrentHashMap.newKeySet();

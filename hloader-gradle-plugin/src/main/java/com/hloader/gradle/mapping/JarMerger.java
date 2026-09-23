@@ -1,4 +1,4 @@
-package com.hloader.gradle;
+package com.hloader.gradle.mapping;
 
 import java.io.File;
 import java.io.IOException;
@@ -31,12 +31,12 @@ import org.objectweb.asm.tree.MethodNode;
  * actually running, so a stub is never invoked - it only needs to exist so a mod's {@code @Mixin}/
  * {@code @Shadow} references to either side's members compile in one place.
  */
-final class JarMerger {
+public final class JarMerger {
 
     private JarMerger() {
     }
 
-    static void merge(File primary, File secondary, File output) throws IOException {
+    public static void merge(File primary, File secondary, File output) throws IOException {
         Map<String, byte[]> primaryClasses = readClasses(primary);
         Map<String, byte[]> secondaryClasses = readClasses(secondary);
 

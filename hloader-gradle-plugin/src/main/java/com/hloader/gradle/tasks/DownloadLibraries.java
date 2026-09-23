@@ -1,5 +1,6 @@
-package com.hloader.gradle;
+package com.hloader.gradle.tasks;
 
+import com.hloader.gradle.MinecraftVersionInfo;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
