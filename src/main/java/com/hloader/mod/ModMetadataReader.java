@@ -49,9 +49,10 @@ final class ModMetadataReader {
             }
             String version = getString(json, "version");
             List<String> depends = getStringList(json, "depends");
+            List<String> disabledFeatures = getStringList(json, "disabledFeatures");
 
             return new ModMetadata(id, version == null ? "0.0.0" : version, entrypoint, asmEntrypoint,
-                    accessTransformer, depends);
+                    accessTransformer, depends, disabledFeatures);
         }
     }
 

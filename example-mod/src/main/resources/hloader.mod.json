@@ -4,5 +4,6 @@
   "entrypoint": "com.example.ExampleMod",
   "asmEntrypoint": "com.example.ExampleAsmTransformer",
   "accessTransformer": "example_at.cfg",
-  "depends": []
+  "depends": [],
+  "disabledFeatures": ["/title-changer"]
 }

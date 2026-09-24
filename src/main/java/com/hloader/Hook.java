@@ -3,6 +3,8 @@ package com.hloader;
 import com.hloader.at.AccessTransformerApplier;
 import com.hloader.at.AccessTransformerParser;
 import com.hloader.at.AccessTransformerRule;
+import com.hloader.feature.Feature;
+import com.hloader.feature.FeatureRegistry;
 import com.hloader.mixin.RuntimeClassMap;
 import com.hloader.mod.AsmEntrypointTransformer;
 import com.hloader.mod.AsmTransformer;
@@ -24,6 +26,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,19 +63,25 @@ public final class Hook {
     }
 
     public static void boot(List<Path> jars, Instrumentation instrumentation, RuntimeClassMap classMap) {
+        Map<ModMetadata, Path> scanned = Map.of();
         if (jars.isEmpty()) {
             System.out.println("hloader: no mod jars found in " + MODS_DIR.toAbsolutePath());
-            return;
-        }
-
-        Map<ModMetadata, Path> scanned;
-        try {
-            scanned = ModScanner.scan(jars);
-        } catch (IOException e) {
-            System.err.println("hloader: failed to scan mods/: " + e.getMessage());
-            return;
+        } else {
+            try {
+                scanned = ModScanner.scan(jars);
+            } catch (IOException e) {
+                System.err.println("hloader: failed to scan mods/: " + e.getMessage());
+            }
         }
         List<ModMetadata> mods = new ArrayList<>(scanned.keySet());
+
+        // Built-in features (see FeatureRegistry) apply regardless of whether any mods are present
+        // at all - only whether to disable one is mod-driven, so this runs before the early return
+        // below for the no-mods case.
+        registerFeatures(mods, instrumentation);
+        if (mods.isEmpty()) {
+            return;
+        }
 
         Set<String> ids = new HashSet<>();
         for (ModMetadata mod : mods) {
@@ -170,6 +179,43 @@ public final class Hook {
                 }
             }
         }, "hloader-shutdown"));
+    }
+
+    /**
+     * A feature disabled by any mod stays disabled for every mod - {@code putIfAbsent} keeps only
+     * the first mod that disabled a given feature (for the log line below), but every mod's
+     * {@code disabledFeatures} contributes to the same disabled set, so there's no way for one
+     * mod to override another mod's disable back on.
+     */
+    private static void registerFeatures(List<ModMetadata> mods, Instrumentation instrumentation) {
+        Map<String, String> disabledBy = new LinkedHashMap<>();
+        for (ModMetadata mod : mods) {
+            for (String featureId : mod.disabledFeatures()) {
+                disabledBy.putIfAbsent(featureId, mod.id());
+            }
+        }
+
+        List<AsmTransformer> enabled = new ArrayList<>();
+        for (Feature feature : FeatureRegistry.FEATURES) {
+            String disabledByModId = disabledBy.get(feature.id());
+            if (disabledByModId != null) {
+                System.out.println("hloader: feature '" + feature.id() + "' disabled by mod '" + disabledByModId + "'");
+            } else {
+                enabled.add(feature);
+            }
+        }
+
+        if (!enabled.isEmpty()) {
+            instrumentation.addTransformer(new AsmEntrypointTransformer(enabled), false);
+            StringBuilder ids = new StringBuilder();
+            for (int i = 0; i < enabled.size(); i++) {
+                if (i > 0) {
+                    ids.append(", ");
+                }
+                ids.append(((Feature) enabled.get(i)).id());
+            }
+            System.out.println("hloader: " + enabled.size() + " feature(s) active: " + ids);
+        }
     }
 
     private static List<AccessTransformerRule> readAccessTransformer(Path jar, ModMetadata mod) {

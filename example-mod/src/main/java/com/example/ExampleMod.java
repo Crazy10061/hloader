@@ -8,6 +8,11 @@ public final class ExampleMod implements ModEntrypoint {
     @Override
     public void onInitialize(ModContext context) {
         context.log("initialized");
+        //? if >=1.13 {
+        context.log("running on a flattened-registry version (1.13+)");
+        //? } else {
+        //$$ context.log("running on a pre-flattening version");
+        //? }
     }
 
     @Override

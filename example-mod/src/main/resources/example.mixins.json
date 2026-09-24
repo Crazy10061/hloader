@@ -3,7 +3,7 @@
   "minVersion": "0.8.5",
   "package": "com.example.mixin",
   "mixins": [
-    "RealServerMainMixin"
+    {"if": ">=1.13", "class": "RealServerMainMixin"}
   ],
   "injectors": {
     "defaultRequire": 1
