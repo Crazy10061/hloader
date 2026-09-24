@@ -81,7 +81,13 @@ public final class TitleChangerFeature implements Feature {
                         "(JLjava/lang/CharSequence;)V"
                 );
 
-        return lwjgl2 || lwjgl3;
+        boolean awtFrame =
+                (call.owner.equals("java/awt/Frame") || call.owner.equals("javax/swing/JFrame"))
+                        && call.desc.equals("(Ljava/lang/String;)V")
+                        && ((call.getOpcode() == Opcodes.INVOKESPECIAL && call.name.equals("<init>"))
+                        || (call.getOpcode() == Opcodes.INVOKEVIRTUAL && call.name.equals("setTitle")));
+
+        return lwjgl2 || lwjgl3 || awtFrame;
     }
 
     /**

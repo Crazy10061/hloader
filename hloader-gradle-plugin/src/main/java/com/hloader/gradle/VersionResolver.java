@@ -86,9 +86,54 @@ public final class VersionResolver {
 
     public static String resolveVersionId(String minecraftVersion) {
         if (!"latest".equals(minecraftVersion)) {
-            return minecraftVersion;
+            return canonicalVersionId(minecraftVersion, manifest());
         }
         return manifest().getAsJsonObject("latest").get("release").getAsString();
+    }
+
+    /**
+     * Mojang's ids for the oldest releases aren't what people (or other mapping projects) call
+     * them: {@code 1.0} is often written {@code 1.0.0}, and there is no plain {@code 1.2} at all,
+     * only {@code 1.2.1}-{@code 1.2.5}. Accepts those spellings and returns Mojang's own id -
+     * unknown ids are returned unchanged, so the caller's "unknown version" error still fires.
+     */
+    static String canonicalVersionId(String requested, JsonObject manifest) {
+        List<String> ids = new ArrayList<>();
+        for (JsonElement element : manifest.getAsJsonArray("versions")) {
+            ids.add(element.getAsJsonObject().get("id").getAsString());
+        }
+        if (ids.contains(requested)) {
+            return requested;
+        }
+        for (String alias : equivalentVersionIds(requested)) {
+            if (ids.contains(alias)) {
+                return alias;
+            }
+        }
+        // "1.2" -> the first "1.2.x" release (the manifest lists newest first).
+        if (requested.matches("\\d+\\.\\d+")) {
+            String first = null;
+            for (String id : ids) {
+                if (id.matches(Pattern.quote(requested) + "\\.\\d+")) {
+                    first = id;
+                }
+            }
+            if (first != null) {
+                return first;
+            }
+        }
+        return requested;
+    }
+
+    /** {@code 1.0} &lt;-&gt; {@code 1.0.0}: the same version with a trailing {@code .0} added or removed. */
+    public static List<String> equivalentVersionIds(String versionId) {
+        List<String> aliases = new ArrayList<>();
+        if (versionId.matches("\\d+\\.\\d+")) {
+            aliases.add(versionId + ".0");
+        } else if (versionId.matches("\\d+\\.\\d+\\.0")) {
+            aliases.add(versionId.substring(0, versionId.length() - 2));
+        }
+        return aliases;
     }
 
     /**
@@ -147,7 +192,7 @@ public final class VersionResolver {
         JsonObject manifest = manifest();
         String versionId = "latest".equals(minecraftVersion)
                 ? manifest.getAsJsonObject("latest").get("release").getAsString()
-                : minecraftVersion;
+                : canonicalVersionId(minecraftVersion, manifest);
 
         String versionUrl = null;
         for (JsonElement element : manifest.getAsJsonArray("versions")) {

@@ -6,6 +6,10 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -27,8 +31,9 @@ import java.util.zip.ZipFile;
  * {@code --main-class} or any network access.
  *
  * <p>Deliberately independent of {@code hloader-gradle-plugin}'s VersionResolver (which fetches
- * from Mojang's remote manifest and downloads missing libraries): this only ever reads what a
- * local installation already has on disk, and the two modules aren't set up to share code.</p>
+ * from Mojang's remote manifest and downloads missing libraries): apart from
+ * {@link #fetchVersionJson} (used only by {@code install}), this only ever reads what a local
+ * installation already has on disk, and the two modules aren't set up to share code.</p>
  */
 public final class LocalInstallResolver {
 
@@ -67,6 +72,45 @@ public final class LocalInstallResolver {
             dir = dir.getParent();
         }
         return null;
+    }
+
+    private static final String VERSION_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+
+    /**
+     * Only for {@code install}: the launcher doesn't always leave {@code <id>.json} next to the jar
+     * (e.g. after the version folder was deleted and re-created), but the profile we write needs
+     * it to inherit from. Fetches it from Mojang's version manifest - the same file the launcher
+     * itself would download - into {@code versions/<id>/<id>.json}.
+     *
+     * @return the written JSON, or {@code null} if Mojang's manifest has no version with that id
+     */
+    public static Path fetchVersionJson(Path gameRoot, String versionId) throws IOException {
+        HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+        JsonObject manifest = JsonParser.parseString(httpGet(http, VERSION_MANIFEST_URL)).getAsJsonObject();
+        for (JsonElement element : manifest.getAsJsonArray("versions")) {
+            JsonObject version = element.getAsJsonObject();
+            if (versionId.equals(version.get("id").getAsString())) {
+                Path target = gameRoot.resolve("versions").resolve(versionId).resolve(versionId + ".json");
+                Files.createDirectories(target.getParent());
+                Files.writeString(target, httpGet(http, version.get("url").getAsString()));
+                return target;
+            }
+        }
+        return null;
+    }
+
+    private static String httpGet(HttpClient http, String url) throws IOException {
+        try {
+            HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(url)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new IOException("GET " + url + " returned HTTP " + response.statusCode());
+            }
+            return response.body();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while fetching " + url, e);
+        }
     }
 
     public static String readMainClass(Path versionJson) throws IOException {

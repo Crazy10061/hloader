@@ -66,6 +66,7 @@ public abstract class RunDevServer extends DefaultTask {
             spec.commandLine("java");
             spec.args("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
             spec.args("-Dhloader.side=SERVER");
+            spec.args("-Dhloader.minecraftVersion=" + info.versionId());
             if (Boolean.TRUE.equals(getExportMixins().getOrElse(false))) {
                 spec.args("-Dmixin.debug.export=true");
             }
