@@ -31,8 +31,9 @@ public final class CodePreprocessor {
     private static final Pattern IF_LINE = Pattern.compile("^\\s*//\\?\\s*if\\s+(.+?)\\s*$");
     private static final Pattern ELSE_BLOCK = Pattern.compile("^\\s*//\\?\\s*}\\s*else\\s*\\{\\s*$");
     private static final Pattern END_BLOCK = Pattern.compile("^\\s*//\\?\\s*}\\s*$");
-    private static final Pattern INACTIVE_PREFIX = Pattern.compile("^(\\s*)//\\$\\$ ?(.*)$");
-    private static final Pattern LEADING_WHITESPACE = Pattern.compile("^(\\s*)(.*)$");
+    // DOTALL so (.*) also swallows a trailing '\r' left over from CRLF sources split on '\n'.
+    private static final Pattern INACTIVE_PREFIX = Pattern.compile("^(\\s*)//\\$\\$ ?(.*)$", Pattern.DOTALL);
+    private static final Pattern LEADING_WHITESPACE = Pattern.compile("^(\\s*)(.*)$", Pattern.DOTALL);
 
     private CodePreprocessor() {
     }

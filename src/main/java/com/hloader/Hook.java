@@ -63,6 +63,7 @@ public final class Hook {
     }
 
     public static void boot(List<Path> jars, Instrumentation instrumentation, RuntimeClassMap classMap) {
+        Mappings.init(classMap);
         Map<ModMetadata, Path> scanned = Map.of();
         if (jars.isEmpty()) {
             System.out.println("hloader: no mod jars found in " + MODS_DIR.toAbsolutePath());
@@ -78,7 +79,7 @@ public final class Hook {
         // Built-in features (see FeatureRegistry) apply regardless of whether any mods are present
         // at all - only whether to disable one is mod-driven, so this runs before the early return
         // below for the no-mods case.
-        registerFeatures(mods, instrumentation);
+        registerFeatures(mods, instrumentation, classMap);
         if (mods.isEmpty()) {
             return;
         }
@@ -129,7 +130,7 @@ public final class Hook {
             System.out.println("hloader: " + atRules.size() + " access transformer rule(s) active");
         }
         if (!asmTransformers.isEmpty()) {
-            instrumentation.addTransformer(new AsmEntrypointTransformer(asmTransformers), false);
+            instrumentation.addTransformer(new AsmEntrypointTransformer(asmTransformers, classMap), false);
             System.out.println("hloader: " + asmTransformers.size() + " ASM transformer(s) active");
         }
 
@@ -187,7 +188,7 @@ public final class Hook {
      * {@code disabledFeatures} contributes to the same disabled set, so there's no way for one
      * mod to override another mod's disable back on.
      */
-    private static void registerFeatures(List<ModMetadata> mods, Instrumentation instrumentation) {
+    private static void registerFeatures(List<ModMetadata> mods, Instrumentation instrumentation, RuntimeClassMap classMap) {
         Map<String, String> disabledBy = new LinkedHashMap<>();
         for (ModMetadata mod : mods) {
             for (String featureId : mod.disabledFeatures()) {
@@ -206,7 +207,7 @@ public final class Hook {
         }
 
         if (!enabled.isEmpty()) {
-            instrumentation.addTransformer(new AsmEntrypointTransformer(enabled), false);
+            instrumentation.addTransformer(new AsmEntrypointTransformer(enabled, classMap), false);
             StringBuilder ids = new StringBuilder();
             for (int i = 0; i < enabled.size(); i++) {
                 if (i > 0) {

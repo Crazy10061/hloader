@@ -310,6 +310,16 @@ public abstract class GenerateMappings extends DefaultTask {
      * 1.3.2-1.13.2).
      */
     private static MappingSet tryLegacyFabricMappings(String versionId) throws IOException {
+        for (String alias : VersionResolver.equivalentVersionIds(versionId)) {
+            MappingSet mappings = tryLegacyFabricMappingsExact(alias);
+            if (mappings != null) {
+                return mappings;
+            }
+        }
+        return tryLegacyFabricMappingsExact(versionId);
+    }
+
+    private static MappingSet tryLegacyFabricMappingsExact(String versionId) throws IOException {
         String encodedVersion = URLEncoder.encode(versionId, StandardCharsets.UTF_8);
         String intermediaryVersion = newestLegacyFabricVersion(LEGACY_FABRIC_META + "intermediary/" + encodedVersion);
         String yarnVersion = newestLegacyFabricVersion(LEGACY_FABRIC_META + "yarn/" + encodedVersion);
@@ -354,7 +364,26 @@ public abstract class GenerateMappings extends DefaultTask {
      * obfuscated-&gt;named chain (see {@link OrnitheMappings}), no composition needed. Returns
      * {@code null} if unavailable (outside its covered range, roughly c0.0.12a_03-1.14.4).
      */
+    /**
+     * Ornithe names some of the oldest releases differently from Mojang ({@code 1.0.0} for
+     * Mojang's {@code 1.0}) - without trying both, 1.0 silently got no mappings at all and the
+     * "deobfuscated" compile jar stayed fully obfuscated.
+     */
     private static MappingSet tryOrnitheMappings(String versionId) throws IOException {
+        MappingSet mappings = tryOrnitheMappingsExact(versionId);
+        if (mappings != null) {
+            return mappings;
+        }
+        for (String alias : VersionResolver.equivalentVersionIds(versionId)) {
+            mappings = tryOrnitheMappingsExact(alias);
+            if (mappings != null) {
+                return mappings;
+            }
+        }
+        return null;
+    }
+
+    private static MappingSet tryOrnitheMappingsExact(String versionId) throws IOException {
         String encodedVersion = URLEncoder.encode(versionId, StandardCharsets.UTF_8);
         String json = VersionResolver.fetchOrNull(ORNITHE_META + "feather/" + encodedVersion);
         if (json == null) {

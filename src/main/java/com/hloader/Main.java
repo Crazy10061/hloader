@@ -63,12 +63,21 @@ public final class Main {
                     return;
                 }
                 Path input = Path.of(rest.get(0));
+                Path gameRoot = LocalInstallResolver.findGameRoot(input);
+                if (gameRoot == null) {
+                    throw new IOException(input + " doesn't look like an installed vanilla version (no libraries/assets "
+                            + "folders found above it) - install needs an existing version from the vanilla launcher's "
+                            + "own versions/ folder to inherit from.");
+                }
                 Path versionJson = LocalInstallResolver.findSiblingVersionJson(input);
-                Path gameRoot = versionJson != null ? LocalInstallResolver.findGameRoot(input) : null;
-                if (versionJson == null || gameRoot == null) {
-                    throw new IOException(input + " doesn't look like an installed vanilla version (no sibling <id>.json "
-                            + "and/or no libraries/assets folders found above it) - install needs an existing version from "
-                            + "the vanilla launcher's own versions/ folder to inherit from.");
+                if (versionJson == null) {
+                    String id = input.getFileName().toString().replaceFirst("\\.jar$", "");
+                    System.out.println("hloader: no " + id + ".json next to " + input + ", fetching it from Mojang's version manifest");
+                    versionJson = LocalInstallResolver.fetchVersionJson(gameRoot, id);
+                    if (versionJson == null) {
+                        throw new IOException("No sibling " + id + ".json next to " + input + ", and Mojang's version "
+                                + "manifest has no version \"" + id + "\" to fetch it from either.");
+                    }
                 }
                 Path profile = LauncherProfileInstaller.install(gameRoot, versionId(versionJson));
                 System.out.println("hloader: installed " + profile + " - open the vanilla launcher, select \"hloader-"

@@ -92,9 +92,8 @@ public final class LegacyClassLoaderCastTransformer implements ClassFileTransfor
             replacement.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "com/hloader/launch/ClasspathUrls",
                     "wrap", "()Ljava/net/URLClassLoader;", false));
             instructions.insert(cast, replacement);
-            AbstractInsnNode toRemove = call;
             instructions.remove(cast);
-            instructions.remove(toRemove);
+            instructions.remove(call);
             changed = true;
         }
         return changed;

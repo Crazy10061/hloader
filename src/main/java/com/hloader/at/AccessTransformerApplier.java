@@ -17,8 +17,9 @@ import org.objectweb.asm.tree.MethodNode;
 /**
  * Applies Forge-style access-widening rules directly to loaded bytecode. Rules are declared in
  * named (deobfuscated) form by mods; this translates each rule's owner to the runtime obfuscated
- * class name (via {@link RuntimeClassMap}, the same obf&lt;-&gt;named data mixins use) once
- * up front, then matches purely on obfuscated names against the class actually being loaded.
+ * class, member and descriptor names (via {@link RuntimeClassMap}, the same obf&lt;-&gt;named data
+ * mixins use) once up front, then matches purely on obfuscated names against the class actually
+ * being loaded.
  */
 public final class AccessTransformerApplier implements ClassFileTransformer {
 
@@ -27,8 +28,22 @@ public final class AccessTransformerApplier implements ClassFileTransformer {
     public AccessTransformerApplier(List<AccessTransformerRule> rules, RuntimeClassMap classMap) {
         Map<String, List<AccessTransformerRule>> byOwner = new HashMap<>();
         for (AccessTransformerRule rule : rules) {
+            String namedOwner = rule.owner().replace('.', '/');
             String obfOwner = classMap.toObfuscatedName(rule.owner()).replace('.', '/');
-            byOwner.computeIfAbsent(obfOwner, k -> new ArrayList<>()).add(rule);
+            // Members are declared in named form too - translate them (and a method's descriptor)
+            // the same way, so rules match the obfuscated members actually being loaded.
+            String member = rule.member();
+            String descriptor = rule.descriptor();
+            if (member != null && !member.equals("*")) {
+                if (descriptor != null) {
+                    member = classMap.obfuscatingRemapper().mapMethodName(namedOwner, member, descriptor);
+                    descriptor = classMap.obfuscatingRemapper().mapMethodDesc(descriptor);
+                } else {
+                    member = classMap.obfuscatingRemapper().mapFieldName(namedOwner, member, null);
+                }
+            }
+            AccessTransformerRule obfRule = new AccessTransformerRule(rule.visibility(), rule.finalChange(), obfOwner, member, descriptor);
+            byOwner.computeIfAbsent(obfOwner, k -> new ArrayList<>()).add(obfRule);
         }
         this.rulesByObfOwner = byOwner;
     }

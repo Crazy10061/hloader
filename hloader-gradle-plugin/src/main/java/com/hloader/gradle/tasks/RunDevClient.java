@@ -83,6 +83,7 @@ public abstract class RunDevClient extends DefaultTask {
             spec.jvmArgs("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
             spec.jvmArgs("-Djava.library.path=" + getNativesDir().get().getAsFile().getPath());
             spec.jvmArgs("-Dhloader.side=CLIENT");
+            spec.jvmArgs("-Dhloader.minecraftVersion=" + info.versionId());
             if (needsFirstThread(info) && isMac()) {
                 // Modern Minecraft's windowing needs the JVM's actual first OS thread on macOS, or
                 // it fails with "Unable to initialize SDL: No available video device" even with a

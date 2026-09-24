@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -36,6 +37,10 @@ import java.util.UUID;
  */
 public final class LauncherProfileInstaller {
 
+    /** What the launcher uses when a profile has no javaArgs - setting javaArgs replaces these, so keep them. */
+    private static final String DEFAULT_JAVA_ARGS = "-Xmx2G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC "
+            + "-XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M";
+
     private LauncherProfileInstaller() {
     }
 
@@ -59,27 +64,56 @@ public final class LauncherProfileInstaller {
         // instrumentation (-javaagent), which attaches before that main() runs either way, so
         // there's nothing about the actual entrypoint that needs to change.
 
-        JsonObject arguments = new JsonObject();
-        arguments.add("game", new JsonArray());
-        JsonArray jvm = new JsonArray();
-        jvm.add("-javaagent:" + agentJar.toAbsolutePath());
-        // Belt-and-suspenders: the real launcher's own inheritsFrom resolution already
-        // concatenates arguments.jvm from the base version, so the base's own macOS-conditional
-        // "-XstartOnFirstThread" rule (needed for any GLFW/LWJGL3-based version, e.g. modern
-        // Minecraft) should already carry over - but adding it again here too costs nothing if
-        // it's a duplicate, and protects against a launcher whose merge semantics replace instead
-        // of concatenate.
-        if (needsFirstThread(gameRoot, baseVersionId) && isMac()) {
-            jvm.add("-XstartOnFirstThread");
+        String agentArg = "-javaagent:" + agentJar.toAbsolutePath();
+        String legacyGameArguments = legacyMinecraftArguments(gameRoot, baseVersionId);
+        String javaArgs = null;
+        if (legacyGameArguments != null) {
+            // Pre-1.13 base versions have no "arguments" block at all - the launcher builds their
+            // whole JVM command line (-Djava.library.path, -cp, ...) itself. The moment the merged
+            // version has an "arguments" block, though, the launcher switches to the modern format
+            // and takes the JVM args ONLY from arguments.jvm - which the base never had - so the
+            // game launches with just our -javaagent and no -cp at all (ClassNotFoundException for
+            // the main class). Stay in legacy format instead and pass the agent via the profile's
+            // own javaArgs, the only JVM-arg hook legacy versions have.
+            json.addProperty("minecraftArguments", legacyGameArguments);
+            javaArgs = agentArg + " " + DEFAULT_JAVA_ARGS;
+        } else {
+            JsonObject arguments = new JsonObject();
+            arguments.add("game", new JsonArray());
+            JsonArray jvm = new JsonArray();
+            jvm.add(agentArg);
+            // Belt-and-suspenders: the real launcher's own inheritsFrom resolution already
+            // concatenates arguments.jvm from the base version, so the base's own macOS-conditional
+            // "-XstartOnFirstThread" rule (needed for any GLFW/LWJGL3-based version, e.g. modern
+            // Minecraft) should already carry over - but adding it again here too costs nothing if
+            // it's a duplicate, and protects against a launcher whose merge semantics replace instead
+            // of concatenate.
+            if (needsFirstThread(gameRoot, baseVersionId) && isMac()) {
+                jvm.add("-XstartOnFirstThread");
+            }
+            arguments.add("jvm", jvm);
+            json.add("arguments", arguments);
         }
-        arguments.add("jvm", jvm);
-        json.add("arguments", arguments);
 
         Path profileJson = profileDir.resolve(profileId + ".json");
         Files.writeString(profileJson, new GsonBuilder().setPrettyPrinting().create().toJson(json));
 
-        registerLauncherProfile(gameRoot, profileId);
+        registerLauncherProfile(gameRoot, profileId, javaDirOverride(gameRoot, baseVersionId), javaArgs);
         return profileJson;
+    }
+
+    /** {@code minecraftArguments} of a legacy (pre-1.13) base version, or {@code null} for a modern one. */
+    private static String legacyMinecraftArguments(Path gameRoot, String baseVersionId) {
+        Path baseVersionJson = gameRoot.resolve("versions").resolve(baseVersionId).resolve(baseVersionId + ".json");
+        try {
+            JsonObject json = JsonParser.parseString(Files.readString(baseVersionJson)).getAsJsonObject();
+            if (!json.has("arguments") && json.has("minecraftArguments")) {
+                return json.get("minecraftArguments").getAsString();
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // unreadable: fall back to the modern format
+        }
+        return null;
     }
 
     /** Reads {@code <baseVersionId>}'s own cached version JSON and checks whether any of its
@@ -108,6 +142,56 @@ public final class LauncherProfileInstaller {
         }
     }
 
+    /**
+     * The launcher picks the JVM from the base version's own {@code javaVersion} (e.g. 1.12.2 asks
+     * for {@code jre-legacy}, Java 8), but hloader itself is compiled for a much newer class file
+     * version - so {@code -javaagent} dies with {@code UnsupportedClassVersionError} before the game
+     * even starts. When the base version asks for an older Java than the one hloader was built for,
+     * point the profile's {@code javaDir} at the JVM running this installer instead, which is new
+     * enough by definition (it's running hloader right now).
+     *
+     * @return the java executable to force for this profile, or {@code null} to leave the launcher's own choice alone
+     */
+    private static String javaDirOverride(Path gameRoot, String baseVersionId) {
+        int requiredMajor = requiredJavaMajor();
+        int baseMajor = baseJavaMajor(gameRoot, baseVersionId);
+        if (baseMajor >= requiredMajor) {
+            return null;
+        }
+        boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+        Path java = Path.of(System.getProperty("java.home"), "bin", windows ? "javaw.exe" : "java");
+        return Files.isRegularFile(java) ? java.toAbsolutePath().toString() : null;
+    }
+
+    /** Java feature version hloader's own classes were compiled for, from the agent class's class file header. */
+    private static int requiredJavaMajor() {
+        try (InputStream in = LauncherProfileInstaller.class.getResourceAsStream("LauncherProfileInstaller.class")) {
+            if (in != null) {
+                byte[] header = in.readNBytes(8);
+                if (header.length == 8) {
+                    return ((header[6] & 0xFF) << 8 | (header[7] & 0xFF)) - 44;
+                }
+            }
+        } catch (IOException ignored) {
+            // fall through
+        }
+        return Runtime.version().feature();
+    }
+
+    /** {@code javaVersion.majorVersion} of the base version, or 8 for old JSONs that predate that field. */
+    private static int baseJavaMajor(Path gameRoot, String baseVersionId) {
+        Path baseVersionJson = gameRoot.resolve("versions").resolve(baseVersionId).resolve(baseVersionId + ".json");
+        try {
+            JsonObject json = JsonParser.parseString(Files.readString(baseVersionJson)).getAsJsonObject();
+            if (json.has("javaVersion")) {
+                return json.getAsJsonObject("javaVersion").get("majorVersion").getAsInt();
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // treat unreadable/missing as legacy
+        }
+        return 8;
+    }
+
     private static boolean isMac() {
         return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
     }
@@ -119,7 +203,7 @@ public final class LauncherProfileInstaller {
      * reuses the same profile entry (keyed by {@code lastVersionId}, not by generating a new
      * random id each time) instead of piling up duplicates.
      */
-    private static void registerLauncherProfile(Path gameRoot, String profileId) throws IOException {
+    private static void registerLauncherProfile(Path gameRoot, String profileId, String javaDir, String javaArgs) throws IOException {
         Path launcherProfilesFile = gameRoot.resolve("launcher_profiles.json");
         JsonObject root;
         if (Files.isRegularFile(launcherProfilesFile)) {
@@ -154,6 +238,12 @@ public final class LauncherProfileInstaller {
         // "Grass" is a confirmed-valid built-in icon key (present in the user's own existing
         // profiles) - safer than guessing at an icon name the launcher might not recognize.
         profile.addProperty("icon", "Grass");
+        if (javaDir != null) {
+            profile.addProperty("javaDir", javaDir);
+        }
+        if (javaArgs != null) {
+            profile.addProperty("javaArgs", javaArgs);
+        }
         profiles.add(key, profile);
 
         Files.writeString(launcherProfilesFile, new GsonBuilder().setPrettyPrinting().create().toJson(root));
