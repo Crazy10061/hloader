@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 /** CLI entry point: patch a jar, or patch-and-run it in one step like a launcher would. */
@@ -143,6 +144,14 @@ public final class Main {
             command.add(classpath);
             command.add("-javaagent:" + patched.toAbsolutePath());
             command.add("-Djava.library.path=" + nativesDir.toAbsolutePath());
+            if (needsFirstThread(resolved) && isMac()) {
+                // Modern (LWJGL3/GLFW) Minecraft needs the JVM's actual first OS thread on macOS,
+                // or it fails with "Unable to initialize SDL: No available video device". Older,
+                // AWT/LWJGL2-based versions manage the main thread themselves and can hang if this
+                // is forced on them, so it's only added when GLFW is actually on the classpath -
+                // same heuristic as the Gradle plugin's RunDevClient task.
+                command.add("-XstartOnFirstThread");
+            }
             command.add(resolved.mainClass());
 
             // Reasonable offline-login defaults for a local dev-style launch, same shape as the
@@ -181,6 +190,14 @@ public final class Main {
                 .inheritIO()
                 .start();
         return process.waitFor();
+    }
+
+    private static boolean needsFirstThread(LocalInstallResolver.ResolvedLaunch resolved) {
+        return resolved.classpath().stream().anyMatch(p -> p.toString().contains("lwjgl-glfw") || p.toString().contains("lwjgl-sdl"));
+    }
+
+    private static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
     }
 
     private static String versionId(Path versionJson) {
