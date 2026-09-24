@@ -83,12 +83,13 @@ public abstract class RunDevClient extends DefaultTask {
             spec.jvmArgs("-javaagent:" + getLoaderJar().get().getAsFile().getPath());
             spec.jvmArgs("-Djava.library.path=" + getNativesDir().get().getAsFile().getPath());
             spec.jvmArgs("-Dhloader.side=CLIENT");
-            if (usesGlfw(info) && isMac()) {
-                // Modern Minecraft's GLFW/SDL windowing needs the JVM's actual first OS thread on
-                // macOS, or it fails with "Unable to initialize SDL: No available video device"
-                // even with a real display attached. Older, AWT/LWJGL2-based versions manage the
-                // main thread themselves and can hang if this is forced on them, so it's only
-                // added when the version's own libraries pull in LWJGL3's GLFW module.
+            if (needsFirstThread(info) && isMac()) {
+                // Modern Minecraft's windowing needs the JVM's actual first OS thread on macOS, or
+                // it fails with "Unable to initialize SDL: No available video device" even with a
+                // real display attached. Older, AWT/LWJGL2-based versions manage the main thread
+                // themselves and can hang if this is forced on them, so it's only added when the
+                // version's own libraries pull in LWJGL3's windowing module - GLFW pre-Mojang's
+                // switch to SDL3 (roughly 25w-era snapshots onward), lwjgl-sdl since.
                 spec.jvmArgs("-XstartOnFirstThread");
             }
 
@@ -116,8 +117,8 @@ public abstract class RunDevClient extends DefaultTask {
         });
     }
 
-    private static boolean usesGlfw(MinecraftVersionInfo info) {
-        return info.libraries().stream().anyMatch(lib -> lib.path().contains("lwjgl-glfw"));
+    private static boolean needsFirstThread(MinecraftVersionInfo info) {
+        return info.libraries().stream().anyMatch(lib -> lib.path().contains("lwjgl-glfw") || lib.path().contains("lwjgl-sdl"));
     }
 
     private static boolean isMac() {

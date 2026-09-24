@@ -9,16 +9,20 @@ import com.hloader.gradle.tasks.ExtractLibraries;
 import com.hloader.gradle.tasks.GenerateMappings;
 import com.hloader.gradle.tasks.MergeGameJars;
 import com.hloader.gradle.tasks.RemapGameJar;
+import com.hloader.gradle.tasks.ResourcePreprocessor;
 import com.hloader.gradle.tasks.RunDevClient;
 import com.hloader.gradle.tasks.RunDevServer;
+import com.hloader.gradle.tasks.SourcePreprocessor;
 import java.util.List;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
+import org.gradle.api.file.DuplicatesStrategy;
 import org.gradle.api.plugins.JavaPlugin;
 import org.gradle.api.tasks.TaskProvider;
 import org.gradle.api.tasks.bundling.Jar;
 import org.gradle.api.tasks.compile.JavaCompile;
+import org.gradle.language.jvm.tasks.ProcessResources;
 
 /**
  * hloader itself is version-agnostic (it just patches whatever jar you point it at), but writing a
@@ -44,6 +48,69 @@ public class HloaderPlugin implements Plugin<Project> {
         extension.getMinecraftVersion().convention("latest");
         extension.getPatchLegacyLaunchWrapper().convention(true);
         extension.getMappingProvider().convention("auto");
+        extension.getPreprocessSources().convention(false);
+
+        // extension.preprocessSources is read (not just wired lazily) below, so this has to wait
+        // until the consuming build script has actually run its `hloader { }` block - at plugin
+        // apply() time that block hasn't executed yet and the property still only holds its
+        // convention default.
+        project.afterEvaluate(p -> {
+            if (!extension.getPreprocessSources().get()) {
+                return;
+            }
+            TaskProvider<SourcePreprocessor> preprocessSourcesTask = p.getTasks().register(
+                    "preprocessSources", SourcePreprocessor.class, task -> {
+                        task.setGroup("hloader");
+                        task.setDescription("Rewrites //? if <condition> { ... //? } and //$$ blocks in src/main/java "
+                                + "for the active minecraftVersion (Stonecutter-compatible syntax).");
+                        task.getSourceDir().set(p.getLayout().getProjectDirectory().dir("src/main/java"));
+                        task.getOutputDir().set(p.getLayout().getBuildDirectory().dir("hloader/preprocessed/main/java"));
+                        task.getMinecraftVersion().set(extension.getMinecraftVersion());
+                    });
+
+            // Access-transformer .cfg files and *.mixins.json mixin configs - see
+            // ResourcePreprocessor for how each is version-gated. Every other resource (e.g.
+            // hloader.mod.json, a plain non-mixin .json) is copied through unchanged.
+            TaskProvider<ResourcePreprocessor> preprocessResourcesTask = p.getTasks().register(
+                    "preprocessResources", ResourcePreprocessor.class, task -> {
+                        task.setGroup("hloader");
+                        task.setDescription("Version-gates src/main/resources's *.cfg access transformers and "
+                                + "*.mixins.json mixin lists for the active minecraftVersion.");
+                        task.getSourceDir().set(p.getLayout().getProjectDirectory().dir("src/main/resources"));
+                        task.getOutputDir().set(p.getLayout().getBuildDirectory().dir("hloader/preprocessed/main/resources"));
+                        task.getMinecraftVersion().set(extension.getMinecraftVersion());
+                    });
+
+            // Deliberately NOT repointing sourceSet.main.java/resources at the generated output
+            // (an earlier version of this did, via setSrcDirs) - that's exactly the model
+            // IntelliJ's Gradle sync itself reads to decide what's a source root, whether or not
+            // the `idea` plugin's own XML-writing task is even involved. Repointing it meant
+            // IntelliJ either stopped indexing src/main/java entirely, or (once told about the
+            // original directory some other way) saw the same class declared in both the original
+            // and the generated copy and reported it as a duplicate. Overriding compileJava's/
+            // processResources's own inputs directly instead leaves the sourceSet - and therefore
+            // what IntelliJ sees - exactly as it is on a normal, non-preprocessed project: just
+            // src/main/java and src/main/resources, nothing under build/.
+            p.getTasks().named(JavaPlugin.COMPILE_JAVA_TASK_NAME, JavaCompile.class, task -> {
+                task.dependsOn(preprocessSourcesTask);
+                task.setSource(preprocessSourcesTask.flatMap(SourcePreprocessor::getOutputDir));
+            });
+            // processResources' default input is already sourceSet.main.resources (src/main/resources,
+            // untouched) - left alone, same as compileJava's sourceSet is left alone above. This just
+            // layers the two preprocessed file types into the same copy spec; the default duplicates
+            // strategy leaves that ambiguous (build fails asking for one to be picked explicitly), so
+            // it's set here - both entries resolve to identical content either way for a .cfg file
+            // (CodePreprocessor keeps the //? if/} else {/} directive lines in its output so the file
+            // stays re-processable on the next version switch; only the //$$-commented state of the
+            // lines between them differs, and AccessTransformerParser already treats those directive
+            // and inactive lines as no-ops - see ResourcePreprocessor).
+            p.getTasks().named(JavaPlugin.PROCESS_RESOURCES_TASK_NAME, ProcessResources.class, task -> {
+                task.dependsOn(preprocessResourcesTask);
+                task.setDuplicatesStrategy(DuplicatesStrategy.INCLUDE);
+                task.from(preprocessResourcesTask.flatMap(ResourcePreprocessor::getOutputDir),
+                        spec -> spec.include("**/*.cfg", "**/*.mixins.json"));
+            });
+        });
 
         TaskProvider<DownloadMinecraftJar> downloadServerJarTask = project.getTasks().register(
                 "downloadMinecraftJar", DownloadMinecraftJar.class, task -> {

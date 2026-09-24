@@ -2,6 +2,7 @@ package com.hloader.patch;
 
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
@@ -9,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -61,6 +63,15 @@ public final class LauncherProfileInstaller {
         arguments.add("game", new JsonArray());
         JsonArray jvm = new JsonArray();
         jvm.add("-javaagent:" + agentJar.toAbsolutePath());
+        // Belt-and-suspenders: the real launcher's own inheritsFrom resolution already
+        // concatenates arguments.jvm from the base version, so the base's own macOS-conditional
+        // "-XstartOnFirstThread" rule (needed for any GLFW/LWJGL3-based version, e.g. modern
+        // Minecraft) should already carry over - but adding it again here too costs nothing if
+        // it's a duplicate, and protects against a launcher whose merge semantics replace instead
+        // of concatenate.
+        if (needsFirstThread(gameRoot, baseVersionId) && isMac()) {
+            jvm.add("-XstartOnFirstThread");
+        }
         arguments.add("jvm", jvm);
         json.add("arguments", arguments);
 
@@ -69,6 +80,36 @@ public final class LauncherProfileInstaller {
 
         registerLauncherProfile(gameRoot, profileId);
         return profileJson;
+    }
+
+    /** Reads {@code <baseVersionId>}'s own cached version JSON and checks whether any of its
+     * libraries pull in LWJGL3's windowing module (GLFW pre-Mojang's switch to SDL3, lwjgl-sdl
+     * since) - the same heuristic the Gradle plugin's RunDevClient task uses to decide whether
+     * {@code -XstartOnFirstThread} is needed at all. */
+    private static boolean needsFirstThread(Path gameRoot, String baseVersionId) {
+        Path baseVersionJson = gameRoot.resolve("versions").resolve(baseVersionId).resolve(baseVersionId + ".json");
+        if (!Files.isRegularFile(baseVersionJson)) {
+            return false;
+        }
+        try {
+            JsonObject json = JsonParser.parseString(Files.readString(baseVersionJson)).getAsJsonObject();
+            if (!json.has("libraries")) {
+                return false;
+            }
+            for (JsonElement element : json.getAsJsonArray("libraries")) {
+                String name = element.getAsJsonObject().get("name").getAsString();
+                if (name.contains("lwjgl-glfw") || name.contains("lwjgl-sdl")) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
     }
 
     /**

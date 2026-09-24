@@ -9,7 +9,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -61,6 +64,9 @@ public final class VersionResolver {
      */
     private static volatile JsonObject cachedManifest;
 
+    /** Same rationale as {@link #cachedManifest}: derived from it, so cached alongside it for the life of the JVM. */
+    private static volatile List<String> cachedChronologicalVersionIds;
+
     private VersionResolver() {
     }
 
@@ -78,11 +84,62 @@ public final class VersionResolver {
         return local;
     }
 
-    static String resolveVersionId(String minecraftVersion) {
+    public static String resolveVersionId(String minecraftVersion) {
         if (!"latest".equals(minecraftVersion)) {
             return minecraftVersion;
         }
         return manifest().getAsJsonObject("latest").get("release").getAsString();
+    }
+
+    /**
+     * All known version ids (releases, snapshots, and legacy pre-release ids like
+     * {@code c0.0.13a_03} or {@code rd-132211}) ordered oldest to newest, by Mojang's manifest
+     * {@code releaseTime}. These legacy ids aren't semver-sortable, so release time - not the id
+     * string itself - is what {@link #compareVersions} relies on for ordering.
+     */
+    public static List<String> versionIdsChronological() {
+        List<String> local = cachedChronologicalVersionIds;
+        if (local == null) {
+            synchronized (VersionResolver.class) {
+                local = cachedChronologicalVersionIds;
+                if (local == null) {
+                    record Entry(String id, Instant releaseTime) {
+                    }
+                    List<Entry> entries = new ArrayList<>();
+                    for (JsonElement element : manifest().getAsJsonArray("versions")) {
+                        JsonObject entry = element.getAsJsonObject();
+                        entries.add(new Entry(entry.get("id").getAsString(),
+                                OffsetDateTime.parse(entry.get("releaseTime").getAsString()).toInstant()));
+                    }
+                    entries.sort(Comparator.comparing(Entry::releaseTime));
+                    local = entries.stream().map(Entry::id).toList();
+                    cachedChronologicalVersionIds = local;
+                }
+            }
+        }
+        return local;
+    }
+
+    /**
+     * Orders two version ids the way Stonecutter-style {@code //? if} conditions need: negative if
+     * {@code a} released before {@code b}, positive if after, zero if the same id. Both must be
+     * known ids from Mojang's manifest (resolve {@code "latest"} via {@link #resolveVersionId}
+     * first - this doesn't accept it).
+     */
+    public static int compareVersions(String a, String b) {
+        if (a.equals(b)) {
+            return 0;
+        }
+        List<String> order = versionIdsChronological();
+        int indexA = order.indexOf(a);
+        int indexB = order.indexOf(b);
+        if (indexA < 0) {
+            throw new IllegalArgumentException("Unknown Minecraft version: " + a);
+        }
+        if (indexB < 0) {
+            throw new IllegalArgumentException("Unknown Minecraft version: " + b);
+        }
+        return Integer.compare(indexA, indexB);
     }
 
     /** {@code side} is {@code "client"} or {@code "server"}. */
@@ -150,8 +207,47 @@ public final class VersionResolver {
         if (patchLegacyLaunchWrapper && LAUNCHWRAPPER_MAIN_CLASS.equals(mainClass)) {
             libraries = withMcpHackersLaunchWrapper(libraries);
         }
+        libraries = withAppleSiliconNarratorFix(libraries);
 
         return new MinecraftVersionInfo(versionId, mainClass, downloadUrl, assetIndexId, assetIndexUrl, mappingsUrl, libraries, dedicatedServer);
+    }
+
+    /**
+     * Versions old enough to predate Apple Silicon (roughly pre-1.19) pull in {@code jna:4.x} and
+     * {@code java-objc-bridge:1.0.0} for the client's narrator/accessibility support - both bundle
+     * native libraries built before arm64 Macs existed (fat binaries covering only i386/x86_64), so
+     * the client crashes with {@code UnsatisfiedLinkError} the moment the narrator is touched (which
+     * happens unconditionally very early in client startup, not just when narrator is actually
+     * enabled). Mojang itself has long since moved on to {@code jna:5.17.0} and
+     * {@code java-objc-bridge:1.1} - both drop-in replacements (same classes JNA/the objc bridge
+     * consumers use, e.g. {@code com.sun.jna.Native}, {@code ca.weblite.objc.Proxy}) whose bundled
+     * natives are universal x86_64+arm64 binaries - so this just brings an old version's copy of
+     * those two libraries forward to what a current one already ships, the same way
+     * {@link #withMcpHackersLaunchWrapper} brings LaunchWrapper forward.
+     */
+    private static List<LibraryInfo> withAppleSiliconNarratorFix(List<LibraryInfo> original) {
+        if (!isAppleSiliconMac()) {
+            return original;
+        }
+        List<LibraryInfo> patched = new ArrayList<>();
+        boolean sawOldJna = false;
+        boolean sawOldObjcBridge = false;
+        for (LibraryInfo library : original) {
+            if (library.path().matches("net/java/dev/jna/jna/[1-4]\\..*")) {
+                sawOldJna = true;
+            } else if (library.path().startsWith("ca/weblite/java-objc-bridge/1.0.0/")) {
+                sawOldObjcBridge = true;
+            } else {
+                patched.add(library);
+            }
+        }
+        if (sawOldJna) {
+            patched.add(mavenLibrary(MAVEN_CENTRAL, "net/java/dev/jna/jna", "5.17.0", "jna"));
+        }
+        if (sawOldObjcBridge) {
+            patched.add(mavenLibrary(MAVEN_CENTRAL, "ca/weblite/java-objc-bridge", "1.1", "java-objc-bridge"));
+        }
+        return patched;
     }
 
     /**

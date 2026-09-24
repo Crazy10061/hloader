@@ -62,4 +62,22 @@ public interface HloaderExtension {
      * using the global setting.
      */
     MapProperty<String, String> getMappingProviderOverrides();
+
+    /**
+     * When {@code true}, {@code src/main/java} and {@code src/main/resources} are run through
+     * hloader's Stonecutter-compatible preprocessor before compilation, letting one shared source
+     * tree target several {@link #getMinecraftVersion()}s:
+     * <ul>
+     * <li>every {@code .java} file and every {@code .cfg} access-transformer file gets
+     * {@code //? if <condition> { ... //? }} blocks and {@code //$$}-prefixed lines toggled on or
+     * off - see {@link com.hloader.gradle.preprocess.CodePreprocessor} for that syntax;</li>
+     * <li>every {@code *.mixins.json} mixin config gets its {@code "mixins"}/{@code "client"}/
+     * {@code "server"} lists resolved instead, via a JSON-native conditional entry shape ({@code //}
+     * comments aren't valid JSON) - see {@link com.hloader.gradle.preprocess.MixinConfigPreprocessor}.</li>
+     * </ul>
+     * Every other resource (e.g. {@code hloader.mod.json}, a non-mixin {@code .json} file) is copied
+     * through unchanged. Defaults to {@code false} - compilation reads {@code src/main/java} and
+     * {@code src/main/resources} directly, as before.
+     */
+    Property<Boolean> getPreprocessSources();
 }
